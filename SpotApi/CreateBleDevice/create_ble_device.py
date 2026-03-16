@@ -16,7 +16,7 @@ from SpotApi.GetEidInfoForE2eeDevices.get_owner_key import get_owner_key
 from SpotApi.spot_request import spot_request
 
 
-def register_esp32(device_name="GoogleFindMyTools µC"):
+def register_esp32(device_name="GoogleFindMyTools µC", flip_e2ee=True):
 
     owner_key = get_owner_key()
 
@@ -46,12 +46,16 @@ def register_esp32(device_name="GoogleFindMyTools µC"):
     register_request.e2eePublicKeyRegistration.pairingDate = pair_date
 
     # Encrypted User Secrets
-    # Flip bits so Android devices cannot decrypt the key
-    register_request.e2eePublicKeyRegistration.encryptedUserSecrets.encryptedIdentityKey = flip_bits(encrypt_aes_gcm(owner_key, eik), True)
+    # Flip bits so Android devices cannot decrypt the key (if flip_e2ee is True)
+    register_request.e2eePublicKeyRegistration.encryptedUserSecrets.encryptedIdentityKey = flip_bits(encrypt_aes_gcm(owner_key, eik), flip_e2ee)
 
-    # Random keys, not used for ESP
-    register_request.e2eePublicKeyRegistration.encryptedUserSecrets.encryptedAccountKey = secrets.token_bytes(44)
-    register_request.e2eePublicKeyRegistration.encryptedUserSecrets.encryptedSha256AccountKeyPublicAddress = secrets.token_bytes(60)
+    import hashlib
+    # Real keys instead of random garbage so Android can properly decrypt them
+    account_key = secrets.token_bytes(16)
+    public_address = hashlib.sha256(account_key).digest()
+
+    register_request.e2eePublicKeyRegistration.encryptedUserSecrets.encryptedAccountKey = encrypt_aes_gcm(owner_key, account_key)
+    register_request.e2eePublicKeyRegistration.encryptedUserSecrets.encryptedSha256AccountKeyPublicAddress = encrypt_aes_gcm(owner_key, public_address)
 
     register_request.e2eePublicKeyRegistration.encryptedUserSecrets.ownerKeyVersion = 1
     register_request.e2eePublicKeyRegistration.encryptedUserSecrets.creationDate.seconds = pair_date
@@ -82,10 +86,16 @@ def register_esp32(device_name="GoogleFindMyTools µC"):
     bytes_data = register_request.SerializeToString()
     spot_request("CreateBleDevice", bytes_data)
 
-    print("Registered device successfully. Copy the Advertisement Key below. It will not be shown again.")
+    print("Registered device successfully. Copy the keys below. They will not be shown again.")
     print("Afterward, go to the folder 'GoogleFindMyTools/ESP32Firmware' or 'GoogleFindMyTools/ZephyrFirmware' and follow the instructions in the README.md file.")
 
     print("+" + "-" * 78 + "+")
     print("|" + " " * 19 + eid.hex() + " " * 19 + "|")
     print("|" + " " * 30 + "Advertisement Key" + " " * 31 + "|")
+    print("+" + "-" * 78 + "+")
+    print("|" + " " * 7 + eik.hex() + " " * 7 + "|")
+    print("|" + " " * 21 + "Ephemeral Identity Key (EIK)" + " " * 29 + "|")
+    print("+" + "-" * 78 + "+")
+    print("|" + " " * 23 + account_key.hex() + " " * 23 + "|")
+    print("|" + " " * 33 + "Account Key" + " " * 34 + "|")
     print("+" + "-" * 78 + "+")

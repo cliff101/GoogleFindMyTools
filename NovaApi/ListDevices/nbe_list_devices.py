@@ -66,7 +66,9 @@ def list_devices():
             break
         elif selected_value.lower() == 'r':
             print("Loading...")
-            register_esp32()
+            flip_e2ee_input = input("Hide location in official Google FMD app to prevent connection errors? (Y/n): ")
+            flip_e2ee = flip_e2ee_input.lower() != 'n'
+            register_esp32(flip_e2ee=flip_e2ee)
             print("\n")
         else:
             try:

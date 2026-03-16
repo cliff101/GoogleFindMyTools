@@ -1,4 +1,5 @@
 # GoogleFindMyTools
+> Maintained by Gemini 3.1 Pro & Claude Opus 4.6
 
 This repository includes some useful tools that reimplement parts of Google's Find My Device Network (now called Find Hub Network). Note that the code of this repo is still very experimental.
 
@@ -41,15 +42,24 @@ For more information, check the [README in the ESP32Firmware folder](ESP32Firmwa
 ### Turning a Raspberry Pi into a custom tracker
 Because a Raspberry Pi has a built-in Bluetooth adapter (using `BlueZ`), you don't need to compile any custom C firmware for it. You can simply run a bash script to broadcast the tracker advertisement.
 
-1. Run `python main.py` on your Windows/Mac/Linux PC. 
-2. Press 'r' to register a new tracker and copy the **Advertisement Key**.
-3. Move the `fmd_tracker.sh` script to your Raspberry Pi.
+1. Run `python main.py` on your Windows/Mac/Linux PC (or use the GUI: `python main_gui.py`).
+2. Press 'r' to register a new tracker. You will be asked whether to **hide the location** from the official Google Find My Device app:
+   - **Yes (recommended):** The official FMD app won't be able to decrypt the location or connect to the tracker. You only need the **Advertisement Key (EID)** and `fmd_tracker.sh`. No GATT server or extra keys are required — this is the simplest setup.
+   - **No:** The official FMD app can see the location, but will also try to connect to the tracker via GATT (for ringing, device removal, etc.). This requires running the GATT server with all three keys (see the [FHN GATT Server](#fhn-gatt-server-play-sound--ring-support) section below).
+3. Three keys will be displayed — save at minimum the **Advertisement Key (EID)**. If you chose "No" above, save all three:
+   - **Advertisement Key (EID)** (40-char hex / 20 bytes) — used for BLE advertising in `fmd_tracker.sh`.
+   - **Ephemeral Identity Key (EIK)** (64-char hex / 32 bytes) — the master secret used for GATT authentication, ringing, and location decryption.
+   - **Account Key** (32-char hex / 16 bytes) — used by the GATT server for provisioning operations (e.g. removing the device from the Find My Device app).
+4. Move the `fmd_tracker.sh` script to your Raspberry Pi.
 4. Edit the script on your Pi (`nano fmd_tracker.sh`) and paste your 40-character Advertisement Key into the `EID=` variable.
 5. Make the script executable and run it to test:
    ```bash
    chmod +x fmd_tracker.sh
    sudo ./fmd_tracker.sh
    ```
+
+> [!TIP]
+> If you didn't save the keys during registration, you can retrieve them later by selecting the device in `main_gui.py` or `main.py` — the EIK, Account Key, and EID are all displayed when location data is fetched.
 
 **Make it run automatically on boot (Permanent Setup)**
 If your Raspberry Pi restarts, the tracker will stop. To keep it running permanently in the background, set it up as a `systemd` service:
@@ -63,8 +73,9 @@ If your Raspberry Pi restarts, the tracker will stop. To keep it running permane
    Requires=bluetooth.target
 
    [Service]
-   Type=oneshot
-   RemainAfterExit=yes
+   Type=simple
+   Restart=always
+   RestartSec=5
    ExecStart=/usr/local/bin/fmd_tracker.sh
 
    [Install]
@@ -77,6 +88,91 @@ If your Raspberry Pi restarts, the tracker will stop. To keep it running permane
    sudo systemctl start fmd_tracker.service
    ```
    *(You can check if it's running successfully with `sudo systemctl status fmd_tracker.service`)*
+
+### FHN GATT Server (Play Sound / Ring support)
+
+The official Google Find My Device app communicates with trackers over a GATT service defined in the [Find Hub Network Accessory Specification](https://developers.google.com/nearby/fast-pair/specifications/findmy/find-hub-network). Without this service running, the app will show "Connection Failed" when trying to ring your Raspberry Pi tracker.
+
+`fmd_fake_gatt_server.py` implements the Beacon Actions characteristic (`FE2C1238-8366-4814-8EB0-01DE32100BEA`) and handles all FHN operations (ring, provisioning state, unwanted tracking protection, etc.) with proper HMAC-SHA256 authentication.
+
+**Prerequisites on the Raspberry Pi:**
+```bash
+sudo apt-get install python3-dbus python3-gi python3-pycryptodome
+```
+
+**Running manually:**
+```bash
+python fmd_fake_gatt_server.py --eik <EIK> --account-key <AccountKey> --eid <EID>
+```
+
+| Argument | Description | Required |
+|---|---|---|
+| `--eik` | 64-char hex EIK | Yes |
+| `--account-key` | 32-char hex Account Key (needed for provisioning/device removal) | Recommended |
+| `--eid` | 40-char hex Advertisement Key (needed for provisioning state response) | Recommended |
+| `--adapter` | Bluetooth adapter (default: `hci0`) | No |
+
+> [!TIP]
+> You can get all three keys from the GUI: select a device in `main_gui.py` and use the copy buttons for EIK, Account Key, and EID.
+
+**Make it run as a systemd service (Permanent Setup):**
+
+1. Copy the script:
+   ```bash
+   sudo cp fmd_fake_gatt_server.py /usr/local/bin/fmd_fake_gatt_server.py
+   ```
+
+2. Create an environment file to store your keys securely:
+   ```bash
+   sudo nano /etc/fmd_gatt.conf
+   ```
+   Paste:
+   ```
+   EIK=your_64_char_hex_eik_here
+   ACCOUNT_KEY=your_32_char_hex_account_key_here
+   EID=your_40_char_hex_eid_here
+   ```
+   Lock down permissions:
+   ```bash
+   sudo chmod 600 /etc/fmd_gatt.conf
+   ```
+
+3. Create the service file:
+   ```bash
+   sudo nano /etc/systemd/system/fmd_gatt.service
+   ```
+   Paste:
+   ```ini
+   [Unit]
+   Description=FHN GATT Server for Google Find My Device
+   After=bluetooth.target
+   Requires=bluetooth.target
+
+   [Service]
+   Type=simple
+   Restart=always
+   RestartSec=5
+   EnvironmentFile=/etc/fmd_gatt.conf
+   ExecStart=/usr/bin/python3 /usr/local/bin/fmd_fake_gatt_server.py --eik ${EIK} --account-key ${ACCOUNT_KEY} --eid ${EID}
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+4. Enable and start:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable fmd_gatt.service
+   sudo systemctl start fmd_gatt.service
+   ```
+
+5. Check status:
+   ```bash
+   sudo systemctl status fmd_gatt.service
+   ```
+
+> [!NOTE]
+> Both `fmd_tracker.service` (BLE advertising) and `fmd_gatt.service` (GATT server) should run simultaneously for a fully functional tracker that the Find My Device app can both locate and ring.
 
 ### Firmware for custom Zephyr-based trackers
 If you want to use a Zephyr-supported BLE device (e.g. nRF51/52) as a custom Find My Device tracker, you can find the firmware in the folder ZephyrFirmware. To register a new tracker, run main.py and press 'r' if you are asked to. Afterward, follow the instructions on-screen.

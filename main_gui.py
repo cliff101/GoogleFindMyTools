@@ -17,7 +17,7 @@ class FindMyGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Google Find My Tools GUI")
-        self.root.geometry("1200x600")
+        self.root.geometry("1600x1000")
 
         self.canonic_ids = []
         self.locations = []
@@ -35,6 +35,39 @@ class FindMyGUI:
 
         self.refresh_btn = tk.Button(self.left_frame, text="Refresh Devices", command=self.load_devices_async)
         self.refresh_btn.pack(fill=tk.X, pady=5)
+
+        self.eik_label = tk.Label(self.left_frame, text="EIK (for GATT server):", bg="#f0f0f0", font=("Arial", 9))
+        self.eik_label.pack(anchor="w", pady=(10, 0))
+
+        self.eik_var = tk.StringVar()
+        self.eik_entry = tk.Entry(self.left_frame, textvariable=self.eik_var,
+                                  font=("Consolas", 9), state='readonly', readonlybackground="#fff")
+        self.eik_entry.pack(fill=tk.X, pady=(0, 2))
+
+        self.copy_eik_btn = tk.Button(self.left_frame, text="Copy EIK", command=self._copy_eik)
+        self.copy_eik_btn.pack(fill=tk.X, pady=(0, 5))
+
+        self.ak_label = tk.Label(self.left_frame, text="Account Key:", bg="#f0f0f0", font=("Arial", 9))
+        self.ak_label.pack(anchor="w", pady=(5, 0))
+
+        self.ak_var = tk.StringVar()
+        self.ak_entry = tk.Entry(self.left_frame, textvariable=self.ak_var,
+                                 font=("Consolas", 9), state='readonly', readonlybackground="#fff")
+        self.ak_entry.pack(fill=tk.X, pady=(0, 2))
+
+        self.copy_ak_btn = tk.Button(self.left_frame, text="Copy Account Key", command=self._copy_ak)
+        self.copy_ak_btn.pack(fill=tk.X, pady=(0, 5))
+
+        self.eid_label = tk.Label(self.left_frame, text="EID (Advertisement Key):", bg="#f0f0f0", font=("Arial", 9))
+        self.eid_label.pack(anchor="w", pady=(5, 0))
+
+        self.eid_var = tk.StringVar()
+        self.eid_entry = tk.Entry(self.left_frame, textvariable=self.eid_var,
+                                  font=("Consolas", 9), state='readonly', readonlybackground="#fff")
+        self.eid_entry.pack(fill=tk.X, pady=(0, 2))
+
+        self.copy_eid_btn = tk.Button(self.left_frame, text="Copy EID", command=self._copy_eid)
+        self.copy_eid_btn.pack(fill=tk.X, pady=(0, 5))
 
         self.register_btn = tk.Button(self.left_frame, text="Register a new tracker", command=self.register_tracker_async)
         self.register_btn.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
@@ -121,10 +154,39 @@ class FindMyGUI:
         output_str = captured_output.getvalue()
         self.root.after(0, lambda: self._update_location_ui(output_str))
 
+    def _copy_eik(self):
+        eik = self.eik_var.get()
+        if eik:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(eik)
+
+    def _copy_ak(self):
+        ak = self.ak_var.get()
+        if ak:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(ak)
+
+    def _copy_eid(self):
+        eid = self.eid_var.get()
+        if eid:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(eid)
+
     def _update_location_ui(self, output_str):
         self.locations = []
         self.loc_listbox.delete(0, tk.END)
-        
+
+        # Extract EIK, Account Key, and EID from output before trimming
+        eik_match = re.search(r'\[EIK\]\s+([0-9a-fA-F]{64})', output_str)
+        ak_match = re.search(r'\[AccountKey\]\s+([0-9a-fA-F]{32})', output_str)
+        eid_match = re.search(r'\[EID\]\s+([0-9a-fA-F]{40})', output_str)
+        if eik_match:
+            self.eik_var.set(eik_match.group(1))
+        if ak_match:
+            self.ak_var.set(ak_match.group(1))
+        if eid_match:
+            self.eid_var.set(eid_match.group(1))
+
         # Clean up output: Only show the Decrypted Locations part if present
         if "[DecryptLocations]" in output_str:
             clean_str = output_str[output_str.find("[DecryptLocations]"):]
@@ -203,13 +265,15 @@ class FindMyGUI:
         if device_name.strip() == "":
             device_name = "GoogleFindMyTools µC"
             
-        threading.Thread(target=self._register_tracker_thread, args=(device_name,), daemon=True).start()
+        flip_e2ee = messagebox.askyesno("Hide from FMD App?", "Do you want to hide the location in the official Google FMD app to prevent connection errors?\n\nSelecting 'No' will allow the official FMD app to decrypt the location, but it may cause the app to frequently attempt to connect to the tracker and show errors.\n\nRecommended: Yes")
+            
+        threading.Thread(target=self._register_tracker_thread, args=(device_name, flip_e2ee), daemon=True).start()
 
-    def _register_tracker_thread(self, device_name):
+    def _register_tracker_thread(self, device_name, flip_e2ee):
         old_stdout = sys.stdout
         sys.stdout = captured_output = io.StringIO()
         try:
-            register_esp32(device_name)
+            register_esp32(device_name, flip_e2ee)
         except Exception as e:
             print(f"Error registering tracker: {e}")
         finally:

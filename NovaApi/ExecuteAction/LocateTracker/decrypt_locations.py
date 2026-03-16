@@ -40,15 +40,28 @@ def is_mcu_tracker(device_registration: DeviceRegistration) -> bool:
 def retrieve_identity_key(device_registration: DeviceRegistration) -> bytes:
     is_mcu = is_mcu_tracker(device_registration)
     encrypted_user_secrets = device_registration.encryptedUserSecrets
-
-    encrypted_identity_key = flip_bits(
-        encrypted_user_secrets.encryptedIdentityKey,
-        is_mcu)
     owner_key = get_owner_key()
 
+    # Try decrypting the key exactly as it is received
     try:
-        identity_key = decrypt_eik(owner_key, encrypted_identity_key)
+        identity_key = decrypt_eik(owner_key, encrypted_user_secrets.encryptedIdentityKey)
         return identity_key
+    except Exception:
+        pass
+
+    # If it failed, and it's an MCU tracker, it might have flipped bits. Try un-flipping them.
+    if is_mcu:
+        try:
+            flipped_encrypted_identity_key = flip_bits(encrypted_user_secrets.encryptedIdentityKey, True)
+            identity_key = decrypt_eik(owner_key, flipped_encrypted_identity_key)
+            return identity_key
+        except Exception:
+            pass
+
+    # If all attempts fail, proceed to error handling
+    try:
+        # We just call it one more time to trigger the original exception to catch and handle
+        decrypt_eik(owner_key, encrypted_user_secrets.encryptedIdentityKey)
     except Exception as e:
 
         e2eeData = get_eid_info()
@@ -125,6 +138,20 @@ def decrypt_location_response_locations(device_update_protobuf):
             location_time_array.append(wrapped_location)
 
     print("-" * 40)
+    print(f"[EIK] {identity_key.hex()}")
+    try:
+        owner_key = get_owner_key()
+        ak = decrypt_aes_gcm(owner_key, device_registration.encryptedUserSecrets.encryptedAccountKey)
+        print(f"[AccountKey] {ak.hex()}")
+    except Exception:
+        pass
+    try:
+        from FMDNCrypto.eid_generator import generate_eid
+        eid = generate_eid(identity_key, 0)
+        print(f"[EID] {eid.hex()}")
+    except Exception:
+        pass
+    print("-" * 40)
     print("[DecryptLocations] Decrypted Locations:")
 
     if not location_time_array:
@@ -149,8 +176,13 @@ def decrypt_location_response_locations(device_update_protobuf):
             print(f"Altitude: {altitude}")
             print(f"Google Maps Link: {create_google_maps_link(latitude, longitude)}")
             
+        try:
+            status_str = Common_pb2.Status.Name(loc.status)
+        except ValueError:
+            status_str = str(loc.status)
+            
         print(f"Time: {datetime.datetime.fromtimestamp(loc.time).strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"Status: {loc.status}")
+        print(f"Status: {status_str}")
         print(f"Is Own Report: {loc.is_own_report}")
         print("-" * 40)
 
