@@ -16,7 +16,7 @@ from SpotApi.GetEidInfoForE2eeDevices.get_owner_key import get_owner_key
 from SpotApi.spot_request import spot_request
 
 
-def register_esp32():
+def register_esp32(device_name="GoogleFindMyTools µC"):
 
     owner_key = get_owner_key()
 
@@ -28,7 +28,7 @@ def register_esp32():
     register_request.fastPairModelId = mcu_fast_pair_model_id
 
     # Description
-    register_request.description.userDefinedName = "GoogleFindMyTools µC"
+    register_request.description.userDefinedName = device_name
     register_request.description.deviceType = SpotDeviceType.DEVICE_TYPE_BEACON
 
     # Device Components Information

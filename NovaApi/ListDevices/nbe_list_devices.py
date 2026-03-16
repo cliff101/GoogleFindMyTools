@@ -54,22 +54,33 @@ def list_devices():
     print("Welcome to GoogleFindMyTools!")
     print("-" * 50)
     print("")
-    print("The following trackers are available:")
+    while True:
+        print("The following trackers are available:")
 
-    for idx, (device_name, canonic_id) in enumerate(canonic_ids, start=1):
-        print(f"{idx}. {device_name}: {canonic_id}")
+        for idx, (device_name, canonic_id) in enumerate(canonic_ids, start=1):
+            print(f"{idx}. {device_name}: {canonic_id}")
 
-    selected_value = input("\nIf you want to see locations of a tracker, type the number of the tracker and press 'Enter'.\nIf you want to register a new ESP32- or Zephyr-based tracker, type 'r' and press 'Enter': ")
+        selected_value = input("\nIf you want to see locations of a tracker, type the number of the tracker and press 'Enter'.\nIf you want to register a new ESP32- or Zephyr-based tracker, type 'r' and press 'Enter'.\nTo exit, type 'q' and press 'Enter': ")
 
-    if selected_value == 'r':
-        print("Loading...")
-        register_esp32()
-    else:
-        selected_idx = int(selected_value) - 1
-        selected_device_name = canonic_ids[selected_idx][0]
-        selected_canonic_id = canonic_ids[selected_idx][1]
+        if selected_value.lower() == 'q':
+            break
+        elif selected_value.lower() == 'r':
+            print("Loading...")
+            register_esp32()
+            print("\n")
+        else:
+            try:
+                selected_idx = int(selected_value) - 1
+                if 0 <= selected_idx < len(canonic_ids):
+                    selected_device_name = canonic_ids[selected_idx][0]
+                    selected_canonic_id = canonic_ids[selected_idx][1]
 
-        get_location_data_for_device(selected_canonic_id, selected_device_name)
+                    get_location_data_for_device(selected_canonic_id, selected_device_name)
+                    print("\n")
+                else:
+                    print("Invalid selection. Please try again.\n")
+            except ValueError:
+                print("Invalid input. Please enter a valid number, 'r', or 'q'.\n")
 
 
 if __name__ == '__main__':

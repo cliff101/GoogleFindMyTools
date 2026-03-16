@@ -185,4 +185,5 @@ venv/
 
 *** Python cache***
 *.pyc  
+__pycache__/
 # End of https://www.toptal.com/developers/gitignore/api/macos,xcode,swift,swiftpackagemanager,objective-c
