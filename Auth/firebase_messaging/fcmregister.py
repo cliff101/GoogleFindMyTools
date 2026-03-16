@@ -308,6 +308,8 @@ class FcmRegister:
         headers = {
             "x-firebase-client": hb_header,
             "x-goog-api-key": self.config.api_key,
+            "X-Android-Package": self.config.bundle_id,
+            "X-Android-Cert": "38918A453D07199354F8B19AF05EC6562CED5788"
         }
         payload = {
             "appId": self.config.app_id,
@@ -352,6 +354,8 @@ class FcmRegister:
             "Authorization": f"{AUTH_VERSION} {fcm_refresh_token}",
             "x-firebase-client": hb_header,
             "x-goog-api-key": self.config.api_key,
+            "X-Android-Package": self.config.bundle_id,
+            "X-Android-Cert": "38918A453D07199354F8B19AF05EC6562CED5788"
         }
         payload = {
             "installation": {
@@ -416,6 +420,8 @@ class FcmRegister:
         headers = {
             "x-goog-api-key": self.config.api_key,
             "x-goog-firebase-installations-auth": installation["token"],
+            "X-Android-Package": self.config.bundle_id,
+            "X-Android-Cert": "38918A453D07199354F8B19AF05EC6562CED5788"
         }
         # If vapid_key is the default do not send it here or it will error
         vapid_key = (
