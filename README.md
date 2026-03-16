@@ -38,6 +38,46 @@ If you want to use an ESP32 as a custom Find My Device tracker, you can find the
 
 For more information, check the [README in the ESP32Firmware folder](ESP32Firmware/README.md).
 
+### Turning a Raspberry Pi into a custom tracker
+Because a Raspberry Pi has a built-in Bluetooth adapter (using `BlueZ`), you don't need to compile any custom C firmware for it. You can simply run a bash script to broadcast the tracker advertisement.
+
+1. Run `python main.py` on your Windows/Mac/Linux PC. 
+2. Press 'r' to register a new tracker and copy the **Advertisement Key**.
+3. Move the `fmd_tracker.sh` script to your Raspberry Pi.
+4. Edit the script on your Pi (`nano fmd_tracker.sh`) and paste your 40-character Advertisement Key into the `EID=` variable.
+5. Make the script executable and run it to test:
+   ```bash
+   chmod +x fmd_tracker.sh
+   sudo ./fmd_tracker.sh
+   ```
+
+**Make it run automatically on boot (Permanent Setup)**
+If your Raspberry Pi restarts, the tracker will stop. To keep it running permanently in the background, set it up as a `systemd` service:
+1. Move the script to a system path: `sudo cp fmd_tracker.sh /usr/local/bin/fmd_tracker.sh`
+2. Create a service file: `sudo nano /etc/systemd/system/fmd_tracker.service`
+3. Paste the following configuration:
+   ```ini
+   [Unit]
+   Description=Google Find My Device BLE Tracker
+   After=bluetooth.target
+   Requires=bluetooth.target
+
+   [Service]
+   Type=oneshot
+   RemainAfterExit=yes
+   ExecStart=/usr/local/bin/fmd_tracker.sh
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+4. Enable and start the service:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable fmd_tracker.service
+   sudo systemctl start fmd_tracker.service
+   ```
+   *(You can check if it's running successfully with `sudo systemctl status fmd_tracker.service`)*
+
 ### Firmware for custom Zephyr-based trackers
 If you want to use a Zephyr-supported BLE device (e.g. nRF51/52) as a custom Find My Device tracker, you can find the firmware in the folder ZephyrFirmware. To register a new tracker, run main.py and press 'r' if you are asked to. Afterward, follow the instructions on-screen.
 
