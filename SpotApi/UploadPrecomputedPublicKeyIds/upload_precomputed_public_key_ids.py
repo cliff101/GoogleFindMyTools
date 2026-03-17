@@ -30,7 +30,7 @@ def refresh_custom_trackers(device_list: DevicesList):
             static_eid = is_static_eid_device(device.information.deviceRegistration)
             if not static_eid:
                 continue
-            next_eids = get_next_eids(identity_key, new_truncated_ids.pairDate, int(time.time() - hours_to_seconds(3)), duration_seconds=max_truncated_eid_seconds_server, static_eid=static_eid)
+            next_eids = get_next_eids(identity_key, new_truncated_ids.pairDate, int(time.time()), duration_seconds=max_truncated_eid_seconds_server, static_eid=static_eid)
 
             needs_upload = True
             for next_eid in next_eids:

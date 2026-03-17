@@ -133,7 +133,7 @@ class FHNKeys:
 
         if self.pair_date is not None:
             current_time = int(time_mod.time())
-            offset = current_time - self.pair_date
+            offset = max(0, current_time - self.pair_date)
             aligned_offset = (offset // ROTATION_PERIOD) * ROTATION_PERIOD
         else:
             aligned_offset = 0  # static: same as original behaviour
@@ -142,10 +142,16 @@ class FHNKeys:
 
     def get_clock_value(self) -> int:
         """Return clock value as seconds since pair_date (matching fmd_tracker.sh).
-        Falls back to current Unix time if pair_date is not set."""
+        Falls back to current Unix time if pair_date is not set.
+        If the system clock is behind pair_date (e.g. after offline reboot), clamps to 0."""
         current_time = int(time_mod.time())
         if self.pair_date is not None:
-            return current_time - self.pair_date
+            offset = current_time - self.pair_date
+            if offset < 0:
+                print(f"[Keys] WARNING: system clock is behind pair_date by {-offset}s "
+                      "(offline reboot?). Clamping clock offset to 0.")
+                return 0
+            return offset
         return current_time
 
 

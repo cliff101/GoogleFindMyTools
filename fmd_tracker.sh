@@ -19,6 +19,9 @@ PAIR_DATE=0           # Unix timestamp shown at registration (e.g. 1742000000)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPUTE_EID="$SCRIPT_DIR/compute_eid.py"
 
+# File used to persist the last known good timestamp across reboots.
+CLOCK_SAVE_FILE="$SCRIPT_DIR/.last_known_time"
+
 # --- Validate configuration and select mode ---
 EID=$(echo "$EID" | tr -d ' ')
 if [ -n "$EID" ]; then
@@ -45,9 +48,32 @@ else
 fi
 
 # --- Compute current EID from EIK + current time (Mode 2 only) ---
+# Outputs two lines: EID hex, then the Unix timestamp used for computation.
 compute_current_eid() {
     python3 "$COMPUTE_EID" "$EIK" "$PAIR_DATE"
 }
+
+# --- Persist current time so the next boot can restore it if the clock is wrong ---
+save_clock() {
+    echo "$1" > "$CLOCK_SAVE_FILE" 2>/dev/null
+}
+
+# --- Clock sanity check ---
+# On offline reboots the Pi's clock may start behind. If we have a saved
+# timestamp from a previous run that is ahead of the current system time,
+# restore it so EID computation stays correct.
+NOW=$(date +%s)
+if [ -f "$CLOCK_SAVE_FILE" ]; then
+    SAVED_TIME=$(cat "$CLOCK_SAVE_FILE" 2>/dev/null)
+    if [ -n "$SAVED_TIME" ] && [ "$SAVED_TIME" -gt "$NOW" ] 2>/dev/null; then
+        echo "Clock looks wrong (now=$NOW < saved=$SAVED_TIME). Restoring saved time..."
+        sudo date -s "@$SAVED_TIME"
+        echo "System time corrected to $(date). Restarting service in 40 seconds..."
+        sleep 40
+        sudo systemctl restart fmd_tracker.service
+        exit 0
+    fi
+fi
 
 # Make sure bluetooth service is running
 sudo systemctl is-active --quiet bluetooth || sudo systemctl start bluetooth
@@ -76,14 +102,18 @@ echo "Raspberry Pi is now broadcasting as a Find My Device tracker (MAC + EID ro
 
 setup_advertising() {
     if [ "$ROTATING" -eq 1 ]; then
-        # Mode 2: compute EID for the current 1024-second window
-        EID=$(compute_current_eid)
+        # Mode 2: compute EID and capture the precise timestamp used by Python
+        OUTPUT=$(compute_current_eid)
+        EID=$(echo "$OUTPUT" | sed -n '1p')
+        COMPUTE_TIME=$(echo "$OUTPUT" | sed -n '2p')
         if [ -z "$EID" ] || [ ${#EID} -ne 40 ]; then
             echo "Error: failed to compute EID (got: '$EID'). Check compute_eid.py and dependencies."
             exit 1
         fi
-        echo "EID for this window: $EID"
+        save_clock "$COMPUTE_TIME"
+        echo "EID for this window: $EID (t=$COMPUTE_TIME)"
     else
+        save_clock "$(date +%s)"
         echo "EID (static): $EID"
     fi
     EID_SPACED=$(echo "$EID" | sed 's/\(..\)/\1 /g')

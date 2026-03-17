@@ -8,8 +8,9 @@ given its Ephemeral Identity Key (EIK) and pair date.
 Usage:
     python3 compute_eid.py <eik_hex_64chars> <pair_date_unix>
 
-Output:
-    40-character hex EID for the current 1024-second window.
+Output (two lines):
+    Line 1 — 40-character hex EID for the current 1024-second window.
+    Line 2 — Unix timestamp used for the computation (for clock persistence).
 
 This script is intentionally self-contained (no project imports)
 so it can be called from fmd_tracker.sh without PYTHONPATH setup.
@@ -50,13 +51,19 @@ def generate_eid(identity_key: bytes, time_offset: int) -> bytes:
     return R.x().to_bytes(20, 'big')
 
 
-def compute_current_eid(eik_hex: str, pair_date: int) -> str:
+def compute_current_eid(eik_hex: str, pair_date: int) -> tuple[str, int]:
+    """Return (eid_hex, current_time) using the same timestamp for both."""
     eik = bytes.fromhex(eik_hex)
     current_time = int(time.time())
     offset = current_time - pair_date
+    if offset < 0:
+        print(f"Warning: system clock is behind pair_date by {-offset}s "
+              "(offline reboot?). Using pair_date as current time (offset=0).",
+              file=sys.stderr)
+        offset = 0
     aligned_offset = (offset // ROTATION_PERIOD) * ROTATION_PERIOD
     eid = generate_eid(eik, aligned_offset)
-    return eid.hex()
+    return eid.hex(), current_time
 
 
 if __name__ == '__main__':
@@ -71,4 +78,6 @@ if __name__ == '__main__':
         print("Error: EIK must be 64 hex characters (32 bytes)", file=sys.stderr)
         sys.exit(1)
 
-    print(compute_current_eid(eik_hex, pair_date))
+    eid_hex, current_time = compute_current_eid(eik_hex, pair_date)
+    print(eid_hex)
+    print(current_time)

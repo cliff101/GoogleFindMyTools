@@ -75,7 +75,7 @@ def register_esp32(device_name="GoogleFindMyTools µC", flip_e2ee=True):
         else:
             # Rotating EID mode: each window gets its own unique EID.
             window_eid = generate_eid(eik, time_offset)
-
+        
         pub_key_id = PublicKeyIdList.PublicKeyIdInfo()
         pub_key_id.publicKeyId.truncatedEid = window_eid[:10]
         pub_key_id.timestamp.seconds = pair_date + time_offset
