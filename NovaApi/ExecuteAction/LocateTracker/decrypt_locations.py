@@ -37,6 +37,29 @@ def is_mcu_tracker(device_registration: DeviceRegistration) -> bool:
     return device_registration.fastPairModelId == mcu_fast_pair_model_id
 
 
+def is_static_eid_device(device_registration: DeviceRegistration) -> bool:
+    """Return True if the device was registered with flip_e2ee=True (static EID, ESP32-style).
+
+    The EIK is stored with its bits flipped in that case, so normal decryption fails and
+    un-flipping is required — the same heuristic used by retrieve_identity_key.
+    """
+    if not is_mcu_tracker(device_registration):
+        return False
+    encrypted_user_secrets = device_registration.encryptedUserSecrets
+    owner_key = get_owner_key()
+    try:
+        decrypt_eik(owner_key, encrypted_user_secrets.encryptedIdentityKey)
+        return False  # decrypted without flipping → flip_e2ee=False
+    except Exception:
+        pass
+    try:
+        flipped = flip_bits(encrypted_user_secrets.encryptedIdentityKey, True)
+        decrypt_eik(owner_key, flipped)
+        return True   # only decrypts after un-flipping → flip_e2ee=True
+    except Exception:
+        return False  # unknown, assume rotating
+
+
 def retrieve_identity_key(device_registration: DeviceRegistration) -> bytes:
     is_mcu = is_mcu_tracker(device_registration)
     encrypted_user_secrets = device_registration.encryptedUserSecrets
@@ -149,6 +172,12 @@ def decrypt_location_response_locations(device_update_protobuf):
         from FMDNCrypto.eid_generator import generate_eid
         eid = generate_eid(identity_key, 0)
         print(f"[EID] {eid.hex()}")
+    except Exception:
+        pass
+    try:
+        pair_date = device_registration.pairDate
+        if pair_date:
+            print(f"[PairDate] {pair_date}")
     except Exception:
         pass
     print("-" * 40)

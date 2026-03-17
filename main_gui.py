@@ -69,6 +69,17 @@ class FindMyGUI:
         self.copy_eid_btn = tk.Button(self.left_frame, text="Copy EID", command=self._copy_eid)
         self.copy_eid_btn.pack(fill=tk.X, pady=(0, 5))
 
+        self.pair_date_label = tk.Label(self.left_frame, text="Pair Date (Unix timestamp):", bg="#f0f0f0", font=("Arial", 9))
+        self.pair_date_label.pack(anchor="w", pady=(5, 0))
+
+        self.pair_date_var = tk.StringVar()
+        self.pair_date_entry = tk.Entry(self.left_frame, textvariable=self.pair_date_var,
+                                        font=("Consolas", 9), state='readonly', readonlybackground="#fff")
+        self.pair_date_entry.pack(fill=tk.X, pady=(0, 2))
+
+        self.copy_pair_date_btn = tk.Button(self.left_frame, text="Copy Pair Date", command=self._copy_pair_date)
+        self.copy_pair_date_btn.pack(fill=tk.X, pady=(0, 5))
+
         self.register_btn = tk.Button(self.left_frame, text="Register a new tracker", command=self.register_tracker_async)
         self.register_btn.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
 
@@ -111,7 +122,7 @@ class FindMyGUI:
 
             self.root.after(0, self._update_device_list)
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to load devices:\n{str(e)}"))
+            self.root.after(0, lambda e=e: messagebox.showerror("Error", f"Failed to load devices:\n{str(e)}"))
 
     def _update_device_list(self):
         self.device_listbox.delete(0, tk.END)
@@ -172,20 +183,29 @@ class FindMyGUI:
             self.root.clipboard_clear()
             self.root.clipboard_append(eid)
 
+    def _copy_pair_date(self):
+        pair_date = self.pair_date_var.get()
+        if pair_date:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(pair_date)
+
     def _update_location_ui(self, output_str):
         self.locations = []
         self.loc_listbox.delete(0, tk.END)
 
-        # Extract EIK, Account Key, and EID from output before trimming
+        # Extract EIK, Account Key, EID, and Pair Date from output before trimming
         eik_match = re.search(r'\[EIK\]\s+([0-9a-fA-F]{64})', output_str)
         ak_match = re.search(r'\[AccountKey\]\s+([0-9a-fA-F]{32})', output_str)
         eid_match = re.search(r'\[EID\]\s+([0-9a-fA-F]{40})', output_str)
+        pair_date_match = re.search(r'\[PairDate\]\s+(\d+)', output_str)
         if eik_match:
             self.eik_var.set(eik_match.group(1))
         if ak_match:
             self.ak_var.set(ak_match.group(1))
         if eid_match:
             self.eid_var.set(eid_match.group(1))
+        if pair_date_match:
+            self.pair_date_var.set(pair_date_match.group(1))
 
         # Clean up output: Only show the Decrypted Locations part if present
         if "[DecryptLocations]" in output_str:

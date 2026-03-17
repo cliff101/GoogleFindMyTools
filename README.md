@@ -4,7 +4,7 @@
 This repository includes some useful tools that reimplement parts of Google's Find My Device Network (now called Find Hub Network). Note that the code of this repo is still very experimental.
 
 ### What's possible?
-Currently, it is possible to query Find My Device / Find Hub trackers and Android devices, read out their E2EE keys, and decrypt encrypted locations sent from the Find My Device / Find Hub network. You can also send register your own ESP32- or Zephyr-based trackers, as described below.
+Currently, it is possible to query Find My Device / Find Hub trackers and Android devices, read out their E2EE keys, and decrypt encrypted locations sent from the Find My Device / Find Hub network. You can also register your own ESP32-, Zephyr-, or Raspberry Pi-based trackers, as described below.
 
 ### How to use
 
@@ -40,30 +40,53 @@ If you want to use an ESP32 as a custom Find My Device tracker, you can find the
 For more information, check the [README in the ESP32Firmware folder](ESP32Firmware/README.md).
 
 ### Turning a Raspberry Pi into a custom tracker
-Because a Raspberry Pi has a built-in Bluetooth adapter (using `BlueZ`), you don't need to compile any custom C firmware for it. You can simply run a bash script to broadcast the tracker advertisement.
+Because a Raspberry Pi has a built-in Bluetooth adapter (using `BlueZ`), you don't need to compile any custom C firmware for it. You can simply run a bash script to broadcast the tracker advertisement. The EID rotates automatically every ~1024 seconds (synced with MAC rotation), matching the behaviour of commercial FHN trackers.
 
 1. Run `python main.py` on your Windows/Mac/Linux PC (or use the GUI: `python main_gui.py`).
-2. Press 'r' to register a new tracker. You will be asked whether to **hide the location** from the official Google Find My Device app:
-   - **Yes (recommended):** The official FMD app won't be able to decrypt the location or connect to the tracker. You only need the **Advertisement Key (EID)** and `fmd_tracker.sh`. No GATT server or extra keys are required — this is the simplest setup.
-   - **No:** The official FMD app can see the location, but will also try to connect to the tracker via GATT (for ringing, device removal, etc.). This requires running the GATT server with all three keys (see the [FHN GATT Server](#fhn-gatt-server-play-sound--ring-support) section below).
-3. Three keys will be displayed — save at minimum the **Advertisement Key (EID)**. If you chose "No" above, save all three:
-   - **Advertisement Key (EID)** (40-char hex / 20 bytes) — used for BLE advertising in `fmd_tracker.sh`.
-   - **Ephemeral Identity Key (EIK)** (64-char hex / 32 bytes) — the master secret used for GATT authentication, ringing, and location decryption.
-   - **Account Key** (32-char hex / 16 bytes) — used by the GATT server for provisioning operations (e.g. removing the device from the Find My Device app).
-4. Move the `fmd_tracker.sh` script to your Raspberry Pi.
-4. Edit the script on your Pi (`nano fmd_tracker.sh`) and paste your 40-character Advertisement Key into the `EID=` variable.
-5. Make the script executable and run it to test:
+2. Press 'r' to register a new tracker. You will be asked whether to **hide the location** from the official Google Find My Device app. This choice determines which tracker mode to use:
+
+   | | **flip_e2ee = Yes (hide location)** | **flip_e2ee = No (full support)** |
+   |---|---|---|
+   | FMD app can decrypt location | No | Yes |
+   | GATT server required | No | Yes |
+   | `fmd_tracker.sh` mode | **Mode 1 — Static EID** | **Mode 2 — Rotating EID** |
+   | EID rotates like commercial trackers | No | Yes |
+   | Setup complexity | Simplest | Full |
+
+3. Several values will be displayed — save all of them:
+   - **Advertisement Key (EID)** (40-char hex / 20 bytes):
+     - *Mode 1 (static):* this is the fixed EID the tracker will always broadcast. Paste it into `EID=` in `fmd_tracker.sh`.
+     - *Mode 2 (rotating):* this is only the initial EID for reference; the tracker computes EIDs dynamically from EIK + Pair Date.
+   - **Ephemeral Identity Key (EIK)** (64-char hex / 32 bytes) — master secret for rotating EIDs, GATT auth, ringing, and location decryption. Required for Mode 2.
+   - **Account Key** (32-char hex / 16 bytes) — used by the GATT server for provisioning/device removal.
+   - **Pair Date** (Unix timestamp) — registration timestamp, required for Mode 2 (`EID` rotation) and the GATT server.
+4. Copy the required files to your Raspberry Pi:
+   - **Mode 1 (static EID):** copy `fmd_tracker.sh` only.
+   - **Mode 2 (rotating EID):** copy both `fmd_tracker.sh` **and** `compute_eid.py` (both must be in the same directory).
+5. Edit the script on your Pi (`nano fmd_tracker.sh`) and fill in the configuration at the top:
+   - **Mode 1:** set `EID=` to your 40-char Advertisement Key. Leave `EIK` and `PAIR_DATE` at their defaults.
+   - **Mode 2:** leave `EID=""` empty, then set `EIK=` and `PAIR_DATE=`.
+6. Make the script executable and run it to test:
    ```bash
    chmod +x fmd_tracker.sh
    sudo ./fmd_tracker.sh
    ```
 
 > [!TIP]
-> If you didn't save the keys during registration, you can retrieve them later by selecting the device in `main_gui.py` or `main.py` — the EIK, Account Key, and EID are all displayed when location data is fetched.
+> If you didn't save the keys during registration, you can retrieve them later by selecting the device in `main_gui.py` or `main.py` — the EIK, Account Key, EID, and Pair Date are all displayed when location data is fetched.
 
 **Make it run automatically on boot (Permanent Setup)**
 If your Raspberry Pi restarts, the tracker will stop. To keep it running permanently in the background, set it up as a `systemd` service:
-1. Move the script to a system path: `sudo cp fmd_tracker.sh /usr/local/bin/fmd_tracker.sh`
+1. Copy files to a system path:
+   - **Mode 1 (static EID):**
+     ```bash
+     sudo cp fmd_tracker.sh /usr/local/bin/fmd_tracker.sh
+     ```
+   - **Mode 2 (rotating EID):**
+     ```bash
+     sudo cp fmd_tracker.sh /usr/local/bin/fmd_tracker.sh
+     sudo cp compute_eid.py /usr/local/bin/compute_eid.py
+     ```
 2. Create a service file: `sudo nano /etc/systemd/system/fmd_tracker.service`
 3. Paste the following configuration:
    ```ini
@@ -93,27 +116,28 @@ If your Raspberry Pi restarts, the tracker will stop. To keep it running permane
 
 The official Google Find My Device app communicates with trackers over a GATT service defined in the [Find Hub Network Accessory Specification](https://developers.google.com/nearby/fast-pair/specifications/findmy/find-hub-network). Without this service running, the app will show "Connection Failed" when trying to ring your Raspberry Pi tracker.
 
-`fmd_fake_gatt_server.py` implements the Beacon Actions characteristic (`FE2C1238-8366-4814-8EB0-01DE32100BEA`) and handles all FHN operations (ring, provisioning state, unwanted tracking protection, etc.) with proper HMAC-SHA256 authentication.
+`fmd_fake_gatt_server.py` implements the Beacon Actions characteristic (`FE2C1238-8366-4814-8EB0-01DE32100BEA`) and handles all FHN operations (ring, provisioning state, unwanted tracking protection, etc.) with proper HMAC-SHA256 authentication. When `--pair-date` is provided, the GATT server reports the correct clock offset and returns the current rotating EID in provisioning state responses.
 
 **Prerequisites on the Raspberry Pi:**
 ```bash
-sudo apt-get install python3-dbus python3-gi python3-pycryptodome
+sudo apt-get install python3-dbus python3-gi python3-pycryptodome python3-ecdsa
 ```
 
 **Running manually:**
 ```bash
-python fmd_fake_gatt_server.py --eik <EIK> --account-key <AccountKey> --eid <EID>
+python fmd_fake_gatt_server.py --eik <EIK> --account-key <AccountKey> --pair-date <PairDate>
 ```
 
 | Argument | Description | Required |
 |---|---|---|
 | `--eik` | 64-char hex EIK | Yes |
 | `--account-key` | 32-char hex Account Key (needed for provisioning/device removal) | Recommended |
-| `--eid` | 40-char hex Advertisement Key (needed for provisioning state response) | Recommended |
+| `--pair-date` | Unix timestamp from registration (enables EID rotation and correct clock) | Recommended |
+| `--eid` | 40-char hex EID (fallback only, used if `--pair-date` is not set) | No |
 | `--adapter` | Bluetooth adapter (default: `hci0`) | No |
 
 > [!TIP]
-> You can get all three keys from the GUI: select a device in `main_gui.py` and use the copy buttons for EIK, Account Key, and EID.
+> You can get all keys from the GUI: select a device in `main_gui.py` and use the copy buttons for EIK, Account Key, EID, and Pair Date.
 
 **Make it run as a systemd service (Permanent Setup):**
 
@@ -130,7 +154,7 @@ python fmd_fake_gatt_server.py --eik <EIK> --account-key <AccountKey> --eid <EID
    ```
    EIK=your_64_char_hex_eik_here
    ACCOUNT_KEY=your_32_char_hex_account_key_here
-   EID=your_40_char_hex_eid_here
+   PAIR_DATE=your_unix_timestamp_here
    ```
    Lock down permissions:
    ```bash
@@ -153,7 +177,7 @@ python fmd_fake_gatt_server.py --eik <EIK> --account-key <AccountKey> --eid <EID
    Restart=always
    RestartSec=5
    EnvironmentFile=/etc/fmd_gatt.conf
-   ExecStart=/usr/bin/python3 /usr/local/bin/fmd_fake_gatt_server.py --eik ${EIK} --account-key ${ACCOUNT_KEY} --eid ${EID}
+   ExecStart=/usr/bin/python3 /usr/local/bin/fmd_fake_gatt_server.py --eik ${EIK} --account-key ${ACCOUNT_KEY} --pair-date ${PAIR_DATE}
 
    [Install]
    WantedBy=multi-user.target

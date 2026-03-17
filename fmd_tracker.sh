@@ -1,20 +1,53 @@
 #!/bin/bash
 
-# Replace this with your 40-character Advertisement Key from main.py
-EID="INSERT_YOUR_ADVERTISEMENT_KEY_HERE"
+# --- Configuration: choose ONE mode ---
+#
+# MODE 1 — Static EID
+#   Use when registered with flip_e2ee=True (ESP32-style, no GATT server needed).
+#   Paste the 40-char Advertisement Key from registration. EIK and PAIR_DATE are
+#   ignored. EID never changes; simpler but lower privacy than commercial trackers.
+EID=""                # 40-char hex Advertisement Key (leave empty to use Mode 2)
+#
+# MODE 2 — Rotating EID  (recommended)
+#   Use when registered with flip_e2ee=False (Raspberry Pi with GATT server).
+#   EID rotates every ~1024 s, matching the behaviour of commercial FHN trackers.
+#   Leave EID empty above and fill in EIK and PAIR_DATE below.
+EIK="INSERT_YOUR_EIK_64CHAR_HEX_HERE"
+PAIR_DATE=0           # Unix timestamp shown at registration (e.g. 1742000000)
 
-# Remove any spaces and ensure correct length
-EID=$(echo $EID | sed 's/ //g')
+# Path to compute_eid.py — same directory as this script (Mode 2 only).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPUTE_EID="$SCRIPT_DIR/compute_eid.py"
 
-if [ ${#EID} -ne 40 ]; then
-    echo "Error: EID must be exactly 40 characters long."
-    exit 1
+# --- Validate configuration and select mode ---
+EID=$(echo "$EID" | tr -d ' ')
+if [ -n "$EID" ]; then
+    # Mode 1: Static EID
+    if [ ${#EID} -ne 40 ]; then
+        echo "Error: EID must be exactly 40 hex characters (20 bytes)."
+        exit 1
+    fi
+    ROTATING=0
+    echo "Starting Google Find My Device Network Tracker (static EID)..."
+else
+    # Mode 2: Rotating EID
+    EIK=$(echo "$EIK" | tr -d ' ')
+    if [ ${#EIK} -ne 64 ]; then
+        echo "Error: EIK must be exactly 64 hex characters (32 bytes)."
+        exit 1
+    fi
+    if [ "$PAIR_DATE" -eq 0 ]; then
+        echo "Error: PAIR_DATE must be set to the Unix timestamp from registration."
+        exit 1
+    fi
+    ROTATING=1
+    echo "Starting Google Find My Device Network Tracker (rotating EID)..."
 fi
 
-# Format the EID into space-separated bytes for hcitool
-EID_SPACED=$(echo $EID | sed 's/\(..\)/\1 /g')
-
-echo "Starting Google Find My Device Network Tracker..."
+# --- Compute current EID from EIK + current time (Mode 2 only) ---
+compute_current_eid() {
+    python3 "$COMPUTE_EID" "$EIK" "$PAIR_DATE"
+}
 
 # Make sure bluetooth service is running
 sudo systemctl is-active --quiet bluetooth || sudo systemctl start bluetooth
@@ -28,7 +61,8 @@ sudo hciconfig hci0 up
 # Make the device discoverable (piscom/iscan) so it can broadcast
 sudo hciconfig hci0 piscan
 
-# MAC rotation period: 1024 seconds base + 1-204s random jitter (per FHN spec).
+# MAC + EID rotation period: 1024 seconds base + 1-204s random jitter (per FHN spec).
+# MAC address and EID rotate together at the same time, as required by the spec.
 ROTATE_BASE=1024
 ROTATE_JITTER_MIN=1
 ROTATE_JITTER_MAX=204
@@ -38,9 +72,22 @@ ROTATE_JITTER_MAX=204
 # how quickly advertising resumes after a disconnect so the device stays visible.
 ADV_CHECK_INTERVAL=30
 
-echo "Raspberry Pi is now broadcasting as a Find My Device tracker with privacy (MAC rotation) enabled!"
+echo "Raspberry Pi is now broadcasting as a Find My Device tracker (MAC + EID rotation enabled)!"
 
 setup_advertising() {
+    if [ "$ROTATING" -eq 1 ]; then
+        # Mode 2: compute EID for the current 1024-second window
+        EID=$(compute_current_eid)
+        if [ -z "$EID" ] || [ ${#EID} -ne 40 ]; then
+            echo "Error: failed to compute EID (got: '$EID'). Check compute_eid.py and dependencies."
+            exit 1
+        fi
+        echo "EID for this window: $EID"
+    else
+        echo "EID (static): $EID"
+    fi
+    EID_SPACED=$(echo "$EID" | sed 's/\(..\)/\1 /g')
+
     # Generate a random 6-byte Non-Resolvable Private Address (top 2 bits = 00)
     RND=$(hexdump -n 6 -e '6/1 "%02X "' /dev/urandom)
     read -r b1 b2 b3 b4 b5 b6 <<< "$RND"
@@ -52,12 +99,12 @@ setup_advertising() {
     sudo hcitool -i hci0 cmd 0x08 0x0005 $b1 $b2 $b3 $b4 $b5 $b6 >/dev/null
     sudo hcitool -i hci0 cmd 0x08 0x0006 00 08 00 08 00 01 00 00 00 00 00 00 00 07 00 >/dev/null
 
-    # 1C = 28 bytes (no hashed flags). 0x40 = normal FHN frame.
+    # 1C = 28 bytes. 0x40 = normal FHN frame type.
     sudo hcitool -i hci0 cmd 0x08 0x0008 1C 02 01 06 18 16 AA FE 40 $EID_SPACED 00 00 00 >/dev/null
     sudo hcitool -i hci0 cmd 0x08 0x000a 01 >/dev/null
 }
 
-# Initial advertising setup with a fresh MAC address
+# Initial advertising setup with a fresh MAC address and current EID
 JITTER=$(( RANDOM % (ROTATE_JITTER_MAX - ROTATE_JITTER_MIN + 1) + ROTATE_JITTER_MIN ))
 NEXT_ROTATE=$(( ROTATE_BASE + JITTER ))
 ELAPSED=0
@@ -68,7 +115,7 @@ while true; do
     ELAPSED=$(( ELAPSED + ADV_CHECK_INTERVAL ))
 
     if [ $ELAPSED -ge $NEXT_ROTATE ]; then
-        # Time to rotate: new MAC address + fresh advertising setup
+        # Time to rotate: new MAC address + new EID for the current window
         setup_advertising
         JITTER=$(( RANDOM % (ROTATE_JITTER_MAX - ROTATE_JITTER_MIN + 1) + ROTATE_JITTER_MIN ))
         NEXT_ROTATE=$(( ROTATE_BASE + JITTER ))

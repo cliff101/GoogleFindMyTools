@@ -23,12 +23,14 @@ import sys
 import argparse
 import hashlib
 import hmac as hmac_mod
+import time as time_mod
 import dbus
 import dbus.service
 import dbus.mainloop.glib
 from gi.repository import GLib
 import secrets
 from Cryptodome.Cipher import AES
+from ecdsa import SECP160r1
 
 BLUEZ_SERVICE_NAME = 'org.bluez'
 GATT_MANAGER_IFACE = 'org.bluez.GattManager1'
@@ -44,6 +46,8 @@ DEVICE_INFO_SVC_UUID = '180A'
 FIRMWARE_REVISION_CHR_UUID = '2A26'
 
 PROTOCOL_MAJOR_VERSION = 0x01
+K = 10
+ROTATION_PERIOD = 1024  # 2^K seconds
 
 
 def truncated_sha256(data):
@@ -54,16 +58,41 @@ def compute_hmac(key, message):
     return hmac_mod.new(key, message, hashlib.sha256).digest()[:8]
 
 
+def _generate_eid_from_eik(identity_key: bytes, time_offset: int) -> bytes:
+    """Compute EID from EIK and time offset (seconds since pair_date, K low bits cleared)."""
+    mask = ~((1 << K) - 1)
+    time_offset &= mask
+    ts_bytes = time_offset.to_bytes(4, byteorder='big')
+
+    data = bytearray(32)
+    data[0:11] = b'\xFF' * 11
+    data[11] = K
+    data[12:16] = ts_bytes
+    data[16:27] = b'\x00' * 11
+    data[27] = K
+    data[28:32] = ts_bytes
+
+    cipher = AES.new(identity_key, AES.MODE_ECB)
+    r_dash = cipher.encrypt(bytes(data))
+
+    r_dash_int = int.from_bytes(r_dash, byteorder='big', signed=False)
+    curve = SECP160r1
+    r = r_dash_int % curve.order
+    R = r * curve.generator
+    return R.x().to_bytes(20, 'big')
+
+
 class FHNKeys:
     """Derives all FHN keys from the Ephemeral Identity Key."""
 
-    def __init__(self, eik_hex=None, account_key_hex=None, eid_hex=None):
+    def __init__(self, eik_hex=None, account_key_hex=None, eid_hex=None, pair_date=None):
         self.eik = None
         self.eid = None
         self.ring_key = None
         self.recovery_key = None
         self.utp_key = None
         self.account_key = None
+        self.pair_date = pair_date  # Unix timestamp at registration
 
         if eik_hex:
             self.eik = bytes.fromhex(eik_hex)
@@ -88,7 +117,36 @@ class FHNKeys:
         if eid_hex:
             self.eid = bytes.fromhex(eid_hex)
             assert len(self.eid) == 20, "EID must be 20 bytes"
-            print(f"[Keys] EID loaded ({self.eid[:4].hex()}...)")
+            print(f"[Keys] Static EID loaded ({self.eid[:4].hex()}...)")
+
+        if pair_date:
+            print(f"[Keys] Pair date: {pair_date} — EID rotation enabled")
+        else:
+            print("[Keys] No pair date — EID rotation disabled (static EID or offset=0)")
+
+    def get_current_eid(self) -> bytes:
+        """Return the EID for the current 1024-second window.
+        If pair_date is set, compute dynamically from EIK + current time offset.
+        Otherwise fall back to the static EID or offset-0 EID."""
+        if self.eik is None:
+            return self.eid or (b'\x00' * 20)
+
+        if self.pair_date is not None:
+            current_time = int(time_mod.time())
+            offset = current_time - self.pair_date
+            aligned_offset = (offset // ROTATION_PERIOD) * ROTATION_PERIOD
+        else:
+            aligned_offset = 0  # static: same as original behaviour
+
+        return _generate_eid_from_eik(self.eik, aligned_offset)
+
+    def get_clock_value(self) -> int:
+        """Return clock value as seconds since pair_date (matching fmd_tracker.sh).
+        Falls back to current Unix time if pair_date is not set."""
+        current_time = int(time_mod.time())
+        if self.pair_date is not None:
+            return current_time - self.pair_date
+        return current_time
 
 
 # ---------------------------------------------------------------------------
@@ -413,8 +471,7 @@ class BeaconActionsCharacteristic(Characteristic):
             additional = bytes(16)
         else:
             # Beacon parameters: 8 bytes data + 8 bytes zero padding, AES-ECB encrypted
-            import time
-            clock_val = int(time.time())
+            clock_val = self.keys.get_clock_value()
             params = bytearray(16)
             params[0] = 0x00        # calibrated power (0 dBm)
             params[1:5] = clock_val.to_bytes(4, 'big')
@@ -455,7 +512,7 @@ class BeaconActionsCharacteristic(Characteristic):
         if owner_match:
             state |= 0x02
 
-        eid = self.keys.eid or (b'\x00' * 20)
+        eid = self.keys.get_current_eid()
         additional = bytes([state]) + eid
         auth = self._response_hmac(self.keys.account_key, nonce, 0x01, additional)
         resp = self._build_response(0x01, auth, additional)
@@ -657,12 +714,16 @@ if __name__ == '__main__':
     parser.add_argument('--account-key', type=str, default=None,
                         help='Account Key as 32-char hex string (16 bytes)')
     parser.add_argument('--eid', type=str, default=None,
-                        help='Current EID (Advertisement Key) as 40-char hex string (20 bytes)')
+                        help='Current EID (Advertisement Key) as 40-char hex string (20 bytes) — '
+                             'only used as fallback when --pair-date is not set')
+    parser.add_argument('--pair-date', type=int, default=None,
+                        help='Unix timestamp at registration (enables EID rotation and correct clock)')
     parser.add_argument('--adapter', type=str, default='hci0',
                         help='Bluetooth adapter (default: hci0)')
     args = parser.parse_args()
 
-    keys = FHNKeys(eik_hex=args.eik, account_key_hex=args.account_key, eid_hex=args.eid)
+    keys = FHNKeys(eik_hex=args.eik, account_key_hex=args.account_key,
+                   eid_hex=args.eid, pair_date=args.pair_date)
 
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
