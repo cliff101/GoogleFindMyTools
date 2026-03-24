@@ -20,17 +20,26 @@ Requirements:
 """
 
 import sys
+import os
 import argparse
 import hashlib
 import hmac as hmac_mod
 import time as time_mod
+import threading
+import subprocess
+import random as _random
 import dbus
 import dbus.service
 import dbus.mainloop.glib
 from gi.repository import GLib
 import secrets
 from Cryptodome.Cipher import AES
-from ecdsa import SECP160r1
+
+# Import generate_eid from compute_eid.py (same directory)
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+from compute_eid import generate_eid
 
 BLUEZ_SERVICE_NAME = 'org.bluez'
 GATT_MANAGER_IFACE = 'org.bluez.GattManager1'
@@ -58,34 +67,69 @@ def compute_hmac(key, message):
     return hmac_mod.new(key, message, hashlib.sha256).digest()[:8]
 
 
-def _generate_eid_from_eik(identity_key: bytes, time_offset: int) -> bytes:
-    """Compute EID from EIK and time offset (seconds since pair_date, K low bits cleared)."""
-    mask = ~((1 << K) - 1)
-    time_offset &= mask
-    ts_bytes = time_offset.to_bytes(4, byteorder='big')
 
-    data = bytearray(32)
-    data[0:11] = b'\xFF' * 11
-    data[11] = K
-    data[12:16] = ts_bytes
-    data[16:27] = b'\x00' * 11
-    data[27] = K
-    data[28:32] = ts_bytes
+class TimeState:
+    """Persists a monotonically advancing timestamp to a file.
 
-    cipher = AES.new(identity_key, AES.MODE_ECB)
-    r_dash = cipher.encrypt(bytes(data))
+    Never reads the system clock.  Time advances only via advance().
+    On construction:
+      - If pair_date is newer than the saved value (or no file exists),
+        pair_date becomes the starting time and is written to disk.
+      - Otherwise the saved value is restored.
+    """
 
-    r_dash_int = int.from_bytes(r_dash, byteorder='big', signed=False)
-    curve = SECP160r1
-    r = r_dash_int % curve.order
-    R = r * curve.generator
-    return R.x().to_bytes(20, 'big')
+    def __init__(self, clock_file: str, pair_date=None):
+        self._file = clock_file
+        self._pair_date = pair_date
+        self._lock = threading.Lock()
+        self._current_time = self._load_initial_time()
+
+    # ------------------------------------------------------------------
+    def _read_file(self):
+        try:
+            with open(self._file) as f:
+                return int(f.read().strip())
+        except Exception:
+            return None
+
+    def _write_file(self, t: int) -> None:
+        try:
+            with open(self._file, 'w') as f:
+                f.write(str(t))
+        except Exception:
+            pass
+
+    def _load_initial_time(self) -> int:
+        saved = self._read_file()
+        if self._pair_date is not None and (saved is None or self._pair_date > saved):
+            self._write_file(self._pair_date)
+            print(f"[TimeState] Initialized from pair_date={self._pair_date}")
+            return self._pair_date
+        if saved is not None:
+            print(f"[TimeState] Restored saved time={saved}")
+            return saved
+        fallback = self._pair_date or 0
+        print(f"[TimeState] No saved time and no pair_date; starting at {fallback}")
+        return fallback
+
+    # ------------------------------------------------------------------
+    def get_time(self) -> int:
+        with self._lock:
+            return self._current_time
+
+    def advance(self, seconds: int) -> int:
+        """Increment the tracked time by *seconds*, persist, and return new value."""
+        with self._lock:
+            self._current_time += seconds
+            self._write_file(self._current_time)
+            return self._current_time
 
 
 class FHNKeys:
     """Derives all FHN keys from the Ephemeral Identity Key."""
 
-    def __init__(self, eik_hex=None, account_key_hex=None, eid_hex=None, pair_date=None):
+    def __init__(self, eik_hex=None, account_key_hex=None, eid_hex=None,
+                 pair_date=None, time_state=None):
         self.eik = None
         self.eid = None
         self.ring_key = None
@@ -93,6 +137,7 @@ class FHNKeys:
         self.utp_key = None
         self.account_key = None
         self.pair_date = pair_date  # Unix timestamp at registration
+        self.time_state = time_state  # TimeState instance (shared with advertising thread)
 
         if eik_hex:
             self.eik = bytes.fromhex(eik_hex)
@@ -126,33 +171,115 @@ class FHNKeys:
 
     def get_current_eid(self) -> bytes:
         """Return the EID for the current 1024-second window.
-        If pair_date is set, compute dynamically from EIK + current time offset.
-        Otherwise fall back to the static EID or offset-0 EID."""
+
+        Uses the shared TimeState (never calls time.time()).
+        Falls back to the static EID or offset-0 EID when EIK is absent.
+        """
         if self.eik is None:
             return self.eid or (b'\x00' * 20)
 
-        if self.pair_date is not None:
-            current_time = int(time_mod.time())
-            offset = max(0, current_time - self.pair_date)
+        if self.pair_date is not None and self.time_state is not None:
+            t = self.time_state.get_time()
+            offset = max(0, t - self.pair_date)
             aligned_offset = (offset // ROTATION_PERIOD) * ROTATION_PERIOD
         else:
-            aligned_offset = 0  # static: same as original behaviour
+            aligned_offset = 0
 
-        return _generate_eid_from_eik(self.eik, aligned_offset)
+        return generate_eid(self.eik, aligned_offset)
 
     def get_clock_value(self) -> int:
-        """Return clock value as seconds since pair_date (matching fmd_tracker.sh).
-        Falls back to current Unix time if pair_date is not set.
-        If the system clock is behind pair_date (e.g. after offline reboot), clamps to 0."""
-        current_time = int(time_mod.time())
+        """Return clock offset (seconds since pair_date) from the shared TimeState.
+
+        Never reads the system clock; always uses the persisted TimeState value
+        so the GATT server stays in sync with the advertising thread.
+        """
+        t = self.time_state.get_time() if self.time_state is not None else 0
         if self.pair_date is not None:
-            offset = current_time - self.pair_date
+            offset = t - self.pair_date
             if offset < 0:
-                print(f"[Keys] WARNING: system clock is behind pair_date by {-offset}s "
-                      "(offline reboot?). Clamping clock offset to 0.")
+                print(f"[Keys] WARNING: saved time is behind pair_date by {-offset}s. "
+                      "Clamping clock offset to 0.")
                 return 0
             return offset
-        return current_time
+        return t
+
+
+# ---------------------------------------------------------------------------
+# BLE advertising thread (merged from fmd_tracker.sh)
+# ---------------------------------------------------------------------------
+
+def _advertising_thread_func(eik_hex: str, pair_date: int, time_state: TimeState,
+                              adapter: str = 'hci0',
+                              rotate_base: int = 1024,
+                              rotate_jitter_min: int = 1,
+                              rotate_jitter_max: int = 204,
+                              adv_check_interval: int = 30) -> None:
+    """Background thread: rotates MAC address + EID advertisement.
+
+    Mirrors the logic from fmd_tracker.sh but runs inside the same process
+    so it shares the TimeState with the GATT server, keeping EID values in sync.
+    """
+
+    def run(args):
+        subprocess.run(['sudo'] + args,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def compute_eid_bytes() -> bytes:
+        t = time_state.get_time()
+        offset = max(0, t - pair_date)
+        aligned = (offset // ROTATION_PERIOD) * ROTATION_PERIOD
+        eik = bytes.fromhex(eik_hex)
+        return generate_eid(eik, aligned)
+
+    def random_nrpa():
+        """6-byte Non-Resolvable Private Address (top 2 bits = 00)."""
+        b = bytearray(secrets.token_bytes(6))
+        b[0] &= 0x3F
+        return [f"{x:02X}" for x in b]
+
+    def setup_advertising():
+        eid = compute_eid_bytes()
+        eid_spaced = [f"{x:02X}" for x in eid]
+        addr = random_nrpa()
+        print(f"[Tracker] EID: {eid.hex()}  t={time_state.get_time()}")
+
+        run(['hcitool', '-i', adapter, 'cmd', '0x08', '0x000a', '00'])
+        run(['hcitool', '-i', adapter, 'cmd', '0x08', '0x0005'] + addr)
+        run(['hcitool', '-i', adapter, 'cmd', '0x08', '0x0006',
+             '00', '08', '00', '08', '00', '01',
+             '00', '00', '00', '00', '00', '00', '00', '07', '00'])
+        # 1C = 28 bytes total; 0x40 = normal FHN frame type
+        run(['hcitool', '-i', adapter, 'cmd', '0x08', '0x0008',
+             '1C', '02', '01', '06', '18', '16', 'AA', 'FE', '40']
+            + eid_spaced + ['00', '00', '00'])
+        run(['hcitool', '-i', adapter, 'cmd', '0x08', '0x000a', '01'])
+
+    # Bluetooth bring-up  
+    run(['systemctl', 'start', 'bluetooth'])
+    time_mod.sleep(1)
+    run(['hciconfig', adapter, 'up'])
+    run(['hciconfig', adapter, 'piscan'])
+
+    print("[Tracker] Advertising thread running (MAC + EID rotation enabled)")
+
+    jitter = _random.randint(rotate_jitter_min, rotate_jitter_max)
+    next_rotate = rotate_base + jitter
+    elapsed = 0
+    setup_advertising()
+
+    while True:
+        time_mod.sleep(adv_check_interval)
+        time_state.advance(adv_check_interval)
+        elapsed += adv_check_interval
+
+        if elapsed >= next_rotate:
+            setup_advertising()
+            jitter = _random.randint(rotate_jitter_min, rotate_jitter_max)
+            next_rotate = rotate_base + jitter
+            elapsed = 0
+        else:
+            # Re-enable advertising in case a GATT connection stopped it
+            run(['hcitool', '-i', adapter, 'cmd', '0x08', '0x000a', '01'])
 
 
 # ---------------------------------------------------------------------------
@@ -724,12 +851,19 @@ if __name__ == '__main__':
                              'only used as fallback when --pair-date is not set')
     parser.add_argument('--pair-date', type=int, default=None,
                         help='Unix timestamp at registration (enables EID rotation and correct clock)')
+    parser.add_argument('--clock-file', type=str, default=None,
+                        help='Path to clock persistence file '
+                             '(default: .last_known_time next to this script)')
     parser.add_argument('--adapter', type=str, default='hci0',
                         help='Bluetooth adapter (default: hci0)')
     args = parser.parse_args()
 
+    clock_file = args.clock_file or os.path.join(_SCRIPT_DIR, '.last_known_time')
+    time_state = TimeState(clock_file, pair_date=args.pair_date)
+
     keys = FHNKeys(eik_hex=args.eik, account_key_hex=args.account_key,
-                   eid_hex=args.eid, pair_date=args.pair_date)
+                   eid_hex=args.eid, pair_date=args.pair_date,
+                   time_state=time_state)
 
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
@@ -749,6 +883,19 @@ if __name__ == '__main__':
         GATT_MANAGER_IFACE)
 
     app = Application(bus, keys)
+
+    # Start the BLE advertising thread when EIK + pair-date are both provided
+    if args.eik and args.pair_date:
+        adv_thread = threading.Thread(
+            target=_advertising_thread_func,
+            args=(args.eik, args.pair_date, time_state),
+            kwargs={'adapter': args.adapter},
+            daemon=True,
+        )
+        adv_thread.start()
+        print("[Tracker] Advertising thread started")
+    else:
+        print("[Tracker] Advertising thread skipped (--pair-date not set)")
 
     print("Registering FHN GATT service...")
     mainloop = GLib.MainLoop()

@@ -2,11 +2,14 @@
 """
 Standalone EID computation helper.
 
-Computes the current Ephemeral Identifier (EID) for a DIY FHN tracker
-given its Ephemeral Identity Key (EIK) and pair date.
+Computes the Ephemeral Identifier (EID) for a DIY FHN tracker given its
+Ephemeral Identity Key (EIK), pair date, and an explicit current timestamp.
 
 Usage:
-    python3 compute_eid.py <eik_hex_64chars> <pair_date_unix>
+    python3 compute_eid.py <eik_hex_64chars> <pair_date_unix> [<current_time_unix>]
+
+    If <current_time_unix> is omitted, the value is read from the
+    .last_known_time file in the same directory as this script.
 
 Output (two lines):
     Line 1 — 40-character hex EID for the current 1024-second window.
@@ -18,7 +21,7 @@ Requires: pycryptodome, ecdsa  (already in requirements.txt)
 """
 
 import sys
-import time
+import os
 
 from Cryptodome.Cipher import AES
 from ecdsa import SECP160r1
@@ -51,14 +54,17 @@ def generate_eid(identity_key: bytes, time_offset: int) -> bytes:
     return R.x().to_bytes(20, 'big')
 
 
-def compute_current_eid(eik_hex: str, pair_date: int) -> tuple[str, int]:
-    """Return (eid_hex, current_time) using the same timestamp for both."""
+def compute_current_eid(eik_hex: str, pair_date: int, current_time: int) -> tuple[str, int]:
+    """Return (eid_hex, current_time) for the given explicit timestamp.
+
+    Never reads the system clock; the caller is responsible for supplying
+    a monotonically advancing current_time (e.g. loaded from .last_known_time).
+    """
     eik = bytes.fromhex(eik_hex)
-    current_time = int(time.time())
     offset = current_time - pair_date
     if offset < 0:
-        print(f"Warning: system clock is behind pair_date by {-offset}s "
-              "(offline reboot?). Using pair_date as current time (offset=0).",
+        print(f"Warning: current_time is behind pair_date by {-offset}s "
+              "(stale save file?). Using offset=0.",
               file=sys.stderr)
         offset = 0
     aligned_offset = (offset // ROTATION_PERIOD) * ROTATION_PERIOD
@@ -67,8 +73,9 @@ def compute_current_eid(eik_hex: str, pair_date: int) -> tuple[str, int]:
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        print("Usage: compute_eid.py <eik_hex_64chars> <pair_date_unix>", file=sys.stderr)
+    if len(sys.argv) not in (3, 4):
+        print("Usage: compute_eid.py <eik_hex_64chars> <pair_date_unix> [<current_time_unix>]",
+              file=sys.stderr)
         sys.exit(1)
 
     eik_hex = sys.argv[1]
@@ -78,6 +85,18 @@ if __name__ == '__main__':
         print("Error: EIK must be 64 hex characters (32 bytes)", file=sys.stderr)
         sys.exit(1)
 
-    eid_hex, current_time = compute_current_eid(eik_hex, pair_date)
+    if len(sys.argv) == 4:
+        current_time = int(sys.argv[3])
+    else:
+        clock_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.last_known_time')
+        try:
+            with open(clock_file) as _f:
+                current_time = int(_f.read().strip())
+        except Exception:
+            print(f"Error: no current_time given and {clock_file} not found or unreadable.",
+                  file=sys.stderr)
+            sys.exit(1)
+
+    eid_hex, t = compute_current_eid(eik_hex, pair_date, current_time)
     print(eid_hex)
-    print(current_time)
+    print(t)

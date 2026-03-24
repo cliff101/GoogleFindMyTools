@@ -47,10 +47,11 @@ else
     echo "Starting Google Find My Device Network Tracker (rotating EID)..."
 fi
 
-# --- Compute current EID from EIK + current time (Mode 2 only) ---
-# Outputs two lines: EID hex, then the Unix timestamp used for computation.
+# --- Compute EID for the current window (Mode 2 only) ---
+# Passes the tracked CURRENT_TIME; never reads the system clock.
+# Outputs two lines: EID hex, then the timestamp used.
 compute_current_eid() {
-    python3 "$COMPUTE_EID" "$EIK" "$PAIR_DATE"
+    python3 "$COMPUTE_EID" "$EIK" "$PAIR_DATE" "$CURRENT_TIME"
 }
 
 # --- Persist current time so the next boot can restore it if the clock is wrong ---
@@ -58,20 +59,23 @@ save_clock() {
     echo "$1" > "$CLOCK_SAVE_FILE" 2>/dev/null
 }
 
-# --- Clock sanity check ---
-# On offline reboots the Pi's clock may start behind. If we have a saved
-# timestamp from a previous run that is ahead of the current system time,
-# restore it so EID computation stays correct.
-NOW=$(date +%s)
-if [ -f "$CLOCK_SAVE_FILE" ]; then
-    SAVED_TIME=$(cat "$CLOCK_SAVE_FILE" 2>/dev/null)
-    if [ -n "$SAVED_TIME" ] && [ "$SAVED_TIME" -gt "$NOW" ] 2>/dev/null; then
-        echo "Clock looks wrong (now=$NOW < saved=$SAVED_TIME). Restoring saved time..."
-        sudo date -s "@$SAVED_TIME"
-        echo "System time corrected to $(date). Restarting service in 40 seconds..."
-        sleep 40
-        sudo systemctl restart fmd_tracker.service
-        exit 0
+# --- Initialize monotonic time counter (Mode 2 only) ---
+# We never read the system clock for EID computation.
+# Use PAIR_DATE when it is newer than the saved file, or when no file exists.
+if [ "$ROTATING" -eq 1 ]; then
+    CURRENT_TIME=""
+    if [ -f "$CLOCK_SAVE_FILE" ]; then
+        SAVED_TIME=$(cat "$CLOCK_SAVE_FILE" 2>/dev/null)
+        if [ -n "$SAVED_TIME" ] && [ "$SAVED_TIME" -gt 0 ] 2>/dev/null; then
+            CURRENT_TIME="$SAVED_TIME"
+        fi
+    fi
+    if [ -z "$CURRENT_TIME" ] || [ "$PAIR_DATE" -gt "$CURRENT_TIME" ] 2>/dev/null; then
+        CURRENT_TIME="$PAIR_DATE"
+        save_clock "$CURRENT_TIME"
+        echo "Time initialized from PAIR_DATE: $CURRENT_TIME"
+    else
+        echo "Time restored from saved file: $CURRENT_TIME"
     fi
 fi
 
@@ -102,18 +106,14 @@ echo "Raspberry Pi is now broadcasting as a Find My Device tracker (MAC + EID ro
 
 setup_advertising() {
     if [ "$ROTATING" -eq 1 ]; then
-        # Mode 2: compute EID and capture the precise timestamp used by Python
         OUTPUT=$(compute_current_eid)
         EID=$(echo "$OUTPUT" | sed -n '1p')
-        COMPUTE_TIME=$(echo "$OUTPUT" | sed -n '2p')
         if [ -z "$EID" ] || [ ${#EID} -ne 40 ]; then
             echo "Error: failed to compute EID (got: '$EID'). Check compute_eid.py and dependencies."
             exit 1
         fi
-        save_clock "$COMPUTE_TIME"
-        echo "EID for this window: $EID (t=$COMPUTE_TIME)"
+        echo "EID for this window: $EID (t=$CURRENT_TIME)"
     else
-        save_clock "$(date +%s)"
         echo "EID (static): $EID"
     fi
     EID_SPACED=$(echo "$EID" | sed 's/\(..\)/\1 /g')
@@ -143,6 +143,12 @@ setup_advertising
 while true; do
     sleep $ADV_CHECK_INTERVAL
     ELAPSED=$(( ELAPSED + ADV_CHECK_INTERVAL ))
+
+    # Advance and persist the monotonic time counter (Mode 2 only)
+    if [ "$ROTATING" -eq 1 ]; then
+        CURRENT_TIME=$(( CURRENT_TIME + ADV_CHECK_INTERVAL ))
+        save_clock "$CURRENT_TIME"
+    fi
 
     if [ $ELAPSED -ge $NEXT_ROTATE ]; then
         # Time to rotate: new MAC address + new EID for the current window
