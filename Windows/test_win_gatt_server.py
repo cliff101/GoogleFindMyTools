@@ -1,8 +1,8 @@
 import asyncio
 import uuid
-import winsdk.windows.devices.bluetooth as bt
-import winsdk.windows.devices.bluetooth.genericattributeprofile as gatt
-from winsdk.windows.storage.streams import DataWriter
+import winrt.windows.devices.bluetooth as bt
+import winrt.windows.devices.bluetooth.genericattributeprofile as gatt
+from winrt.windows.storage.streams import DataWriter
 
 # Fast Pair Service
 FAST_PAIR_SVC_UUID = uuid.UUID("0000FE2C-0000-1000-8000-00805F9B34FB")
@@ -97,7 +97,9 @@ async def main():
         adv_params.is_connectable = True
         
         print("Starting advertising...")
-        service_provider.start_advertising(adv_params)
+        # PyWinRT exposes the parameterized WinRT overload as start_advertising_with_parameters
+        # (start_advertising() is the no-arg overload only).
+        service_provider.start_advertising_with_parameters(adv_params)
         print(f"Advertising status: {service_provider.advertisement_status}")
         
         print("FMD GATT Server is running. Advertising for 15 seconds...")

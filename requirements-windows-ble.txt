@@ -1,0 +1,8 @@
+# Extra deps for Windows BLE scripts (Windows/fmd_fake_gatt_server_windows.py, test_win_*.py).
+# Install after: pip install -r requirements.txt
+#
+# PyWinRT packages ship pre-built wheels for 64-bit CPython on Windows (including 3.13+).
+winrt-windows-devices-bluetooth==3.2.1
+winrt-windows-devices-bluetooth-genericattributeprofile==3.2.1
+winrt-windows-devices-bluetooth-advertisement==3.2.1
+winrt-windows-storage-streams==3.2.1

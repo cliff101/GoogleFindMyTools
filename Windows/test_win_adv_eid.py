@@ -1,5 +1,5 @@
-import winsdk.windows.devices.bluetooth.advertisement as adv
-from winsdk.windows.storage.streams import DataWriter
+import winrt.windows.devices.bluetooth.advertisement as adv
+from winrt.windows.storage.streams import DataWriter
 import time
 
 def main():

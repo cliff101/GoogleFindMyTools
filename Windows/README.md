@@ -2,7 +2,7 @@
 
 The official Google Find My Device app communicates with trackers over a GATT service defined in the [Find Hub Network Accessory Specification](https://developers.google.com/nearby/fast-pair/specifications/findmy/find-hub-network). Without this service running, the app will show "Connection Failed" when trying to ring your Windows-based tracker.
 
-`fmd_fake_gatt_server_windows.py` is the Windows port of the Raspberry Pi GATT server. It uses the [WinSDK](https://github.com/pywinrt/python-winsdk) BLE peripheral APIs (`Windows.Devices.Bluetooth.GenericAttributeProfile`) instead of BlueZ/D-Bus. It implements the Beacon Actions characteristic (`FE2C1238-8366-4814-8EB0-01DE32100BEA`) and handles all FHN operations (ring, provisioning state, unwanted tracking protection, etc.) with proper HMAC-SHA256 authentication. The EID rotates automatically every ~1024 seconds, matching the behaviour of commercial FHN trackers.
+`fmd_fake_gatt_server_windows.py` is the Windows port of the Raspberry Pi GATT server. It uses [PyWinRT](https://github.com/pywinrt/pywinrt) (`winrt-*` packages) for the BLE peripheral APIs (`Windows.Devices.Bluetooth.GenericAttributeProfile`) instead of BlueZ/D-Bus. It implements the Beacon Actions characteristic (`FE2C1238-8366-4814-8EB0-01DE32100BEA`) and handles all FHN operations (ring, provisioning state, unwanted tracking protection, etc.) with proper HMAC-SHA256 authentication. The EID rotates automatically every ~1024 seconds, matching the behaviour of commercial FHN trackers.
 
 When the app sends a ring command, the server plays an audible beep through the Windows speaker using `winsound`.
 
@@ -10,13 +10,20 @@ When the app sends a ring command, the server plays an audible beep through the 
 > Your Bluetooth adapter **must support the BLE peripheral (GATT server) role**. Many built-in laptop adapters do **not**. If the script prints `Bluetooth adapter does not support peripheral (GATT server) role!`, you need a compatible USB BLE dongle.
 
 **Prerequisites:**
-```
-pip install pycryptodomex ecdsa winsdk
-```
 
-Or install everything at once from the repository root:
+Use **64-bit CPython on Windows** (3.9+ recommended; PyWinRT ships pre-built wheels for current CPython releases).
+
+From the repository root, install the main project, then the Windows BLE extras:
+
 ```
 pip install -r requirements.txt
+pip install -r requirements-windows-ble.txt
+```
+
+Or install the script dependencies only (same packages as `requirements-windows-ble.txt`, plus `psutil` for battery reporting):
+
+```
+pip install pycryptodomex ecdsa psutil winrt-windows-devices-bluetooth==3.2.1 winrt-windows-devices-bluetooth-genericattributeprofile==3.2.1 winrt-windows-devices-bluetooth-advertisement==3.2.1 winrt-windows-storage-streams==3.2.1
 ```
 
 **Running manually:**
@@ -65,6 +72,8 @@ Register-ScheduledTask -TaskName "FHN GATT Server" `
     -Action $action -Trigger $trigger -Settings $settings `
     -RunLevel Highest `
     -Description "FHN GATT Server for Google Find My Device"
+
+Start-ScheduledTask -TaskName "FHN GATT Server"
 ```
 
 > [!NOTE]

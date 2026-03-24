@@ -16,5 +16,4 @@ setuptools>=75.6.0
 aiohttp>=3.11.8
 http_ece>=1.1.0
 tkintermapview>=1.29
-winsdk
 psutil

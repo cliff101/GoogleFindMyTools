@@ -15,9 +15,9 @@ from tools import ring_service
 
 import random
 
-import winsdk.windows.devices.bluetooth as bt
-import winsdk.windows.devices.bluetooth.genericattributeprofile as gatt
-from winsdk.windows.storage.streams import DataWriter, DataReader
+import winrt.windows.devices.bluetooth as bt
+import winrt.windows.devices.bluetooth.genericattributeprofile as gatt
+from winrt.windows.storage.streams import DataWriter, DataReader
 
 import logging
 
@@ -217,7 +217,7 @@ class FHNGattServer:
         adv_params.is_discoverable = True
 
         try:
-            self.service_provider.start_advertising(adv_params)
+            self.service_provider.start_advertising_with_parameters(adv_params)
             await asyncio.sleep(0.5)
             status = self.service_provider.advertisement_status
             logger.log(logging.INFO, f"[GATT] Fast Pair Service advertising status: {status.name}")
@@ -235,7 +235,7 @@ class FHNGattServer:
                 di_adv_params = gatt.GattServiceProviderAdvertisingParameters()
                 di_adv_params.is_connectable = True
                 di_adv_params.is_discoverable = True
-                self.device_info_provider.start_advertising(di_adv_params)
+                self.device_info_provider.start_advertising_with_parameters(di_adv_params)
                 logger.log(logging.INFO, f"[GATT] Device Info Service advertising status: {self.device_info_provider.advertisement_status.name}")
             except Exception as e:
                 logger.log(logging.ERROR, f"[GATT] Failed to start Device Info advertising: {e}")
@@ -275,7 +275,7 @@ class FHNGattServer:
         writer.write_bytes(bytes([frame_type]) + eid_bytes + bytes([hashed_flags]))
         adv_params.service_data = writer.detach_buffer()
 
-        self.eid_provider.start_advertising(adv_params)
+        self.eid_provider.start_advertising_with_parameters(adv_params)
         await asyncio.sleep(0.3)
         logger.log(logging.INFO, f"[EID] Connectable EID: {eid_bytes.hex().upper()} (status: {self.eid_provider.advertisement_status.name})")
 
