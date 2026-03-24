@@ -29,15 +29,27 @@ class FindMyGUI:
         self.listbox_label = tk.Label(self.left_frame, text="Devices", bg="#f0f0f0", font=("Arial", 12, "bold"))
         self.listbox_label.pack(anchor="w")
 
-        self.device_listbox = tk.Listbox(self.left_frame, height=20, font=("Arial", 11))
-        self.device_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
+        device_list_frame = tk.Frame(self.left_frame, bg="#f0f0f0")
+        device_list_frame.pack(fill=tk.X, pady=5)
+
+        device_list_scroll = tk.Scrollbar(device_list_frame, orient=tk.VERTICAL)
+        device_list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.device_listbox = tk.Listbox(
+            device_list_frame,
+            height=15,
+            font=("Arial", 11),
+            yscrollcommand=device_list_scroll.set,
+        )
+        self.device_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        device_list_scroll.config(command=self.device_listbox.yview)
         self.device_listbox.bind('<<ListboxSelect>>', self.on_device_select)
 
         self.refresh_btn = tk.Button(self.left_frame, text="Refresh Devices", command=self.load_devices_async)
-        self.refresh_btn.pack(fill=tk.X, pady=5)
+        self.refresh_btn.pack(fill=tk.X, pady=(0, 5))
 
         self.eik_label = tk.Label(self.left_frame, text="EIK (for GATT server):", bg="#f0f0f0", font=("Arial", 9))
-        self.eik_label.pack(anchor="w", pady=(10, 0))
+        self.eik_label.pack(anchor="w", pady=(4, 0))
 
         self.eik_var = tk.StringVar()
         self.eik_entry = tk.Entry(self.left_frame, textvariable=self.eik_var,
@@ -81,7 +93,7 @@ class FindMyGUI:
         self.copy_pair_date_btn.pack(fill=tk.X, pady=(0, 5))
 
         self.register_btn = tk.Button(self.left_frame, text="Register a new tracker", command=self.register_tracker_async)
-        self.register_btn.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
+        self.register_btn.pack(fill=tk.X, pady=(10, 5))
 
         # Middle panel: Locations
         self.middle_frame = tk.Frame(root, width=250, bg="#e0e0e0")
