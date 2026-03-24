@@ -6,7 +6,6 @@ import undetected_chromedriver as uc
 import os
 import shutil
 import platform
-import time
 
 def find_chrome():
     """Find Chrome executable using known paths and system commands."""
@@ -45,20 +44,15 @@ def get_options():
     return chrome_options
 
 def create_driver():
-    """Create a Chrome WebDriver with undetected_chromedriver."""
+    """Create a Chrome WebDriver with undetected_chromedriver.
+
+    version_main=None lets uc match the installed Chrome major version (avoids
+    crashes / "target window already closed" when Chrome auto-updates past a
+    pinned driver version).
+    """
     try:
-        # Kill any existing Chrome processes first
-        try:
-            if platform.system() == "Windows":
-                os.system("taskkill /f /im chrome.exe >nul 2>&1")
-            else:
-                os.system("pkill -f chrome")
-            time.sleep(2)  # Wait for processes to close
-        except:
-            pass
-            
         chrome_options = get_options()
-        driver = uc.Chrome(options=chrome_options, version_main=145)
+        driver = uc.Chrome(options=chrome_options, version_main=None)
         print("[ChromeDriver] Installed and browser started.")
         return driver
     except Exception as e:
@@ -69,7 +63,7 @@ def create_driver():
             chrome_options = get_options()
             chrome_options.binary_location = chrome_path
             try:
-                driver = uc.Chrome(options=chrome_options, version_main=145)
+                driver = uc.Chrome(options=chrome_options, version_main=None)
                 print(f"[ChromeDriver] ChromeDriver started using {chrome_path}")
                 return driver
             except Exception as e:
@@ -82,7 +76,7 @@ def create_driver():
         try:
             chrome_options = get_options()
             chrome_options.add_argument("--headless")
-            driver = uc.Chrome(options=chrome_options, version_main=145)
+            driver = uc.Chrome(options=chrome_options, version_main=None)
             print("[ChromeDriver] Started in headless mode successfully.")
             return driver
         except Exception as e:
