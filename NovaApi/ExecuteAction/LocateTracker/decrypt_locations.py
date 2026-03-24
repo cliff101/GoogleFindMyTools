@@ -6,6 +6,7 @@
 import datetime
 import hashlib
 
+from FMDNCrypto.eid_generator import ROTATION_PERIOD
 from FMDNCrypto.foreign_tracker_cryptor import decrypt
 from KeyBackup.cloud_key_decryptor import decrypt_eik, decrypt_aes_gcm
 from NovaApi.ExecuteAction.LocateTracker.decrypted_location import WrappedLocation
@@ -103,9 +104,82 @@ def retrieve_identity_key(device_registration: DeviceRegistration) -> bytes:
             exit(1)
 
 
+def _beacon_time_candidates(
+    is_mcu: bool,
+    device_time_offset: int,
+    pair_date: int | None,
+    report_time_seconds: int,
+) -> list[int]:
+    """Candidate beacon time counters for EID-based AES-EAX decryption (see calculate_r)."""
+    primary = 0 if is_mcu else device_time_offset
+    candidates: list[int] = [primary]
+    if is_mcu:
+        candidates.append(device_time_offset)
+    else:
+        candidates.append(0)
+    if pair_date and report_time_seconds >= pair_date:
+        rel = report_time_seconds - pair_date
+        aligned = (rel // ROTATION_PERIOD) * ROTATION_PERIOD
+        if aligned >= 0:
+            candidates.extend(
+                (
+                    aligned,
+                    max(0, aligned - ROTATION_PERIOD),
+                    aligned + ROTATION_PERIOD,
+                )
+            )
+    for delta in (-3, -2, -1, 1, 2, 3):
+        candidates.append((primary + delta * ROTATION_PERIOD) & 0xFFFFFFFF)
+    seen: set[int] = set()
+    out: list[int] = []
+    for x in candidates:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def _try_decrypt_network_location(
+    identity_key: bytes,
+    encrypted_location: bytes,
+    public_key_random: bytes,
+    is_mcu: bool,
+    device_time_offset: int,
+    pair_date: int | None,
+    report_time_seconds: int,
+) -> bytes:
+    """Decrypt crowdsourced/network report; retry alternate beacon times if MAC fails."""
+    last_err: Exception | None = None
+    for beacon_time in _beacon_time_candidates(
+        is_mcu, device_time_offset, pair_date, report_time_seconds
+    ):
+        try:
+            return decrypt(
+                identity_key,
+                encrypted_location,
+                public_key_random,
+                beacon_time,
+            )
+        except ValueError as e:
+            last_err = e
+            if "MAC check failed" not in str(e):
+                raise
+            continue
+    assert last_err is not None
+    raise last_err
+
+
 def decrypt_location_response_locations(device_update_protobuf):
 
     device_registration = device_update_protobuf.deviceMetadata.information.deviceRegistration
+
+    pair_date = None
+    try:
+        pd = device_registration.pairDate
+        if pd:
+            pair_date = int(pd)
+    except Exception:
+        pass
 
     identity_key = retrieve_identity_key(device_registration)
     locations_proto = device_update_protobuf.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations
@@ -147,8 +221,17 @@ def decrypt_location_response_locations(device_update_protobuf):
                 identity_key_hash = hashlib.sha256(identity_key).digest()
                 decrypted_location = decrypt_aes_gcm(identity_key_hash, encrypted_location)
             else:
-                time_offset = 0 if is_mcu else loc.geoLocation.deviceTimeOffset
-                decrypted_location = decrypt(identity_key, encrypted_location, public_key_random, time_offset)
+                device_time_offset_raw = loc.geoLocation.deviceTimeOffset
+                report_ts = int(time.seconds)
+                decrypted_location = _try_decrypt_network_location(
+                    identity_key,
+                    encrypted_location,
+                    public_key_random,
+                    is_mcu,
+                    device_time_offset_raw,
+                    pair_date,
+                    report_ts,
+                )
 
             wrapped_location = WrappedLocation(
                 decrypted_location=decrypted_location,
