@@ -2,6 +2,10 @@
 # Install after: pip install -r requirements.txt
 #
 # PyWinRT packages ship pre-built wheels for 64-bit CPython on Windows (including 3.13+).
+# Foundation is required for IAsyncOperation / async WinRT calls (e.g. get_default_async).
+# Foundation.Collections is required for some GATT APIs (e.g. subscribed_clients).
+winrt-windows-foundation==3.2.1
+winrt-windows-foundation-collections==3.2.1
 winrt-windows-devices-bluetooth==3.2.1
 winrt-windows-devices-bluetooth-genericattributeprofile==3.2.1
 winrt-windows-devices-bluetooth-advertisement==3.2.1

@@ -15,6 +15,8 @@ from tools import ring_service
 
 import random
 
+import winrt.windows.foundation  # noqa: F401 — IAsyncOperation; required for async Bluetooth APIs
+import winrt.windows.foundation.collections  # noqa: F401 — e.g. subscribed_clients on GATT characteristics
 import winrt.windows.devices.bluetooth as bt
 import winrt.windows.devices.bluetooth.genericattributeprofile as gatt
 from winrt.windows.storage.streams import DataWriter, DataReader
@@ -47,6 +49,7 @@ ROTATE_BASE = 1024
 ROTATE_JITTER_MIN = 1
 ROTATE_JITTER_MAX = 204
 EID_CHECK_INTERVAL = 30
+WATCHDOG_RESTART_DELAY_SEC = 5
 
 FAST_PAIR_SVC_UUID = uuid.UUID("0000FE2C-0000-1000-8000-00805F9B34FB")
 MODEL_ID_CHR_UUID = uuid.UUID("FE2C1233-8366-4814-8EB0-01DE32100BEA")
@@ -184,7 +187,12 @@ class FHNGattServer:
     async def start(self):
         self._loop = asyncio.get_running_loop()
 
-        adapter = await bt.BluetoothAdapter.get_default_async()
+        logger.log(logging.INFO, "[GATT] Requesting default Bluetooth adapter...")
+        try:
+            adapter = await bt.BluetoothAdapter.get_default_async()
+        except Exception as e:
+            logger.log(logging.ERROR, f"[GATT] BluetoothAdapter.get_default_async failed: {e!r}", exc_info=True)
+            return False
         if adapter is None:
             logger.log(logging.ERROR, "[GATT] ERROR: No Bluetooth adapter found!")
             return False
@@ -750,8 +758,42 @@ async def main():
         logger.log(logging.INFO, "\nExiting...")
         server.stop()
 
+def _flush_logs():
+    lg = logging.getLogger(__name__)
+    for h in lg.handlers:
+        try:
+            h.flush()
+        except Exception:
+            pass
+
+
+def run_with_watchdog():
+    setup_logging()
+    lg = logging.getLogger(__name__)
+    while True:
+        try:
+            asyncio.run(main())
+            return
+        except KeyboardInterrupt:
+            return
+        except SystemExit as e:
+            code = e.code
+            if code is None or code == 0:
+                return
+            sys.exit(code if isinstance(code, int) else 1)
+        except Exception as e:
+            lg.exception(
+                "Watchdog: %s: %r | restarting in %s s",
+                type(e).__name__,
+                e,
+                WATCHDOG_RESTART_DELAY_SEC,
+            )
+            _flush_logs()
+            time_mod.sleep(WATCHDOG_RESTART_DELAY_SEC)
+
+
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+        run_with_watchdog()
+    finally:
+        _flush_logs()

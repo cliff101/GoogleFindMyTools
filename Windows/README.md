@@ -16,14 +16,14 @@ Use **64-bit CPython on Windows** (3.9+ recommended; PyWinRT ships pre-built whe
 From the repository root, install the main project, then the Windows BLE extras:
 
 ```
-pip install -r requirements.txt
-pip install -r requirements-windows-ble.txt
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-windows-ble.txt
 ```
 
 Or install the script dependencies only (same packages as `requirements-windows-ble.txt`, plus `psutil` for battery reporting):
 
 ```
-pip install pycryptodomex ecdsa psutil winrt-windows-devices-bluetooth==3.2.1 winrt-windows-devices-bluetooth-genericattributeprofile==3.2.1 winrt-windows-devices-bluetooth-advertisement==3.2.1 winrt-windows-storage-streams==3.2.1
+python -m pip install pycryptodomex ecdsa psutil winrt-windows-foundation==3.2.1 winrt-windows-foundation-collections==3.2.1 winrt-windows-devices-bluetooth==3.2.1 winrt-windows-devices-bluetooth-genericattributeprofile==3.2.1 winrt-windows-devices-bluetooth-advertisement==3.2.1 winrt-windows-storage-streams==3.2.1
 ```
 
 **Running manually:**
