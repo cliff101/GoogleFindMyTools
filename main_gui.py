@@ -14,6 +14,9 @@ from NovaApi.ExecuteAction.LocateTracker.location_request import get_location_da
 from SpotApi.CreateBleDevice.create_ble_device import register_esp32
 
 class FindMyGUI:
+    # Default map zoom (used on first load by tkintermapview; "Reset zoom" restores this level)
+    MAP_DEFAULT_ZOOM = 15
+
     def __init__(self, root):
         self.root = root
         self.root.title("Google Find My Tools GUI")
@@ -113,12 +116,28 @@ class FindMyGUI:
         self.info_text = tk.Text(self.right_frame, height=12, state=tk.DISABLED, font=("Consolas", 10))
         self.info_text.pack(fill=tk.X, pady=(0, 10))
 
+        self.map_toolbar = tk.Frame(self.right_frame)
+        self.map_toolbar.pack(fill=tk.X, pady=(0, 4))
+        self.reset_zoom_btn = tk.Button(
+            self.map_toolbar,
+            text="Reset zoom",
+            command=self._reset_map_zoom,
+        )
+        self.reset_zoom_btn.pack(side=tk.RIGHT)
+
         # Map widget
         self.map_widget = tkintermapview.TkinterMapView(self.right_frame, corner_radius=0)
         self.map_widget.pack(fill=tk.BOTH, expand=True)
 
         # Initial load
         self.load_devices_async()
+
+    def _reset_map_zoom(self):
+        self.map_widget.set_zoom(
+            self.MAP_DEFAULT_ZOOM,
+            relative_pointer_x=0.5,
+            relative_pointer_y=0.5,
+        )
 
     def load_devices_async(self):
         self.device_listbox.delete(0, tk.END)
@@ -205,6 +224,11 @@ class FindMyGUI:
         self.locations = []
         self.loc_listbox.delete(0, tk.END)
 
+        self.eik_var.set("")
+        self.ak_var.set("")
+        self.eid_var.set("")
+        self.pair_date_var.set("")
+
         # Extract EIK, Account Key, EID, and Pair Date from output before trimming
         eik_match = re.search(r'\[EIK\]\s+([0-9a-fA-F]{64})', output_str)
         ak_match = re.search(r'\[AccountKey\]\s+([0-9a-fA-F]{32})', output_str)
@@ -282,7 +306,6 @@ class FindMyGUI:
             lon = float(loc_data.get("Longitude", 0))
             if lat != 0 and lon != 0:
                 self.map_widget.set_position(lat, lon)
-                self.map_widget.set_zoom(15)
                 self.map_widget.delete_all_marker()
                 self.map_widget.set_marker(lat, lon, text="Device Location")
             else:
