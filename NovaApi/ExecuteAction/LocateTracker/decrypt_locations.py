@@ -169,17 +169,42 @@ def _try_decrypt_network_location(
     raise last_err
 
 
+def _pair_date_unix_seconds(device_registration: DeviceRegistration) -> int | None:
+    """Unix seconds for pairing / EID anchor time.
+
+    ``DeviceRegistration.pairDate`` is int32 from the server. Some phones send a
+    bogus value (for example 1196); the real registration time is usually
+    ``encryptedUserSecrets.creationDate`` (protobuf ``Time``) instead.
+    """
+    raw: int | None = None
+    try:
+        pd = device_registration.pairDate
+        if pd:
+            raw = int(pd)
+    except Exception:
+        pass
+
+    def _plausible_unix_seconds(v: int) -> bool:
+        # Roughly 2000-01-01 .. int32 max (2038-safe range for seconds)
+        return 946_684_800 <= v <= 2_147_483_647
+
+    if raw is not None and _plausible_unix_seconds(raw):
+        return raw
+
+    eus = device_registration.encryptedUserSecrets
+    if eus and eus.HasField("creationDate"):
+        sec = int(eus.creationDate.seconds)
+        if sec > 0:
+            return sec
+
+    return None
+
+
 def decrypt_location_response_locations(device_update_protobuf):
 
     device_registration = device_update_protobuf.deviceMetadata.information.deviceRegistration
 
-    pair_date = None
-    try:
-        pd = device_registration.pairDate
-        if pd:
-            pair_date = int(pd)
-    except Exception:
-        pass
+    pair_date = _pair_date_unix_seconds(device_registration)
 
     identity_key = retrieve_identity_key(device_registration)
     locations_proto = device_update_protobuf.deviceMetadata.information.locationInformation.reports.recentLocationAndNetworkLocations
@@ -257,12 +282,8 @@ def decrypt_location_response_locations(device_update_protobuf):
         print(f"[EID] {eid.hex()}")
     except Exception:
         pass
-    try:
-        pair_date = device_registration.pairDate
-        if pair_date:
-            print(f"[PairDate] {pair_date}")
-    except Exception:
-        pass
+    if pair_date is not None:
+        print(f"[PairDate] {pair_date}")
     print("-" * 40)
     print("[DecryptLocations] Decrypted Locations:")
 
