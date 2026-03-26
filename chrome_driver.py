@@ -7,6 +7,24 @@ import os
 import shutil
 import platform
 
+def _linux_arm64():
+    """True when Google Chrome for Testing 'linux64' (x86_64) driver cannot run here."""
+    return platform.system() == "Linux" and platform.machine() in ("aarch64", "arm64")
+
+def find_system_chromedriver():
+    """Chromedriver from PATH or distro packages (required on Linux aarch64; uc downloads x86_64 only)."""
+    candidates = [
+        os.environ.get("CHROMEDRIVER_PATH"),
+        shutil.which("chromedriver"),
+        "/usr/bin/chromedriver",
+        "/usr/lib/chromium/chromedriver",
+        "/usr/lib/chromium-browser/chromedriver",
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
+
 def find_chrome():
     """Find Chrome executable using known paths and system commands."""
     possiblePaths = [
@@ -43,6 +61,13 @@ def get_options():
     chrome_options.add_argument("--disable-dev-shm-usage")
     return chrome_options
 
+def _arm64_linux_driver_help():
+    return (
+        "On Linux ARM64, undetected-chromedriver downloads an x86_64 ChromeDriver that cannot run in this environment.\n"
+        "Install a matching driver and ensure it is on PATH, e.g. on Debian/Ubuntu: sudo apt install chromium-driver\n"
+        "Or set CHROMEDRIVER_PATH to the chromedriver binary that matches your Chromium version."
+    )
+
 def create_driver():
     """Create a Chrome WebDriver with undetected_chromedriver.
 
@@ -50,42 +75,69 @@ def create_driver():
     crashes / "target window already closed" when Chrome auto-updates past a
     pinned driver version).
     """
+    chrome_path = find_chrome()
+    driver_path = find_system_chromedriver() if _linux_arm64() else None
+    if _linux_arm64() and not driver_path:
+        raise Exception(
+            "[ChromeDriver] No usable chromedriver on this ARM64 system.\n" + _arm64_linux_driver_help()
+        )
+
+    def _chrome_kwargs():
+        opts = get_options()
+        if chrome_path:
+            opts.binary_location = chrome_path
+        kw = dict(options=opts, version_main=None)
+        if driver_path:
+            kw["driver_executable_path"] = driver_path
+        return kw
+
     try:
-        chrome_options = get_options()
-        driver = uc.Chrome(options=chrome_options, version_main=None)
-        print("[ChromeDriver] Installed and browser started.")
+        driver = uc.Chrome(**_chrome_kwargs())
+        loc = driver_path or "bundled"
+        print(f"[ChromeDriver] Browser started (chromedriver: {loc}).")
         return driver
     except Exception as e:
         print(f"[ChromeDriver] Default ChromeDriver creation failed: {e}")
         print("[ChromeDriver] Trying alternative paths...")
-        chrome_path = find_chrome()
         if chrome_path:
             chrome_options = get_options()
             chrome_options.binary_location = chrome_path
             try:
-                driver = uc.Chrome(options=chrome_options, version_main=None)
-                print(f"[ChromeDriver] ChromeDriver started using {chrome_path}")
+                kw = dict(options=chrome_options, version_main=None)
+                if driver_path:
+                    kw["driver_executable_path"] = driver_path
+                driver = uc.Chrome(**kw)
+                print(f"[ChromeDriver] ChromeDriver started using chrome binary {chrome_path}")
                 return driver
-            except Exception as e:
-                print(f"[ChromeDriver] ChromeDriver failed using path {chrome_path}: {e}")
+            except Exception as e2:
+                print(f"[ChromeDriver] ChromeDriver failed using path {chrome_path}: {e2}")
         else:
             print("[ChromeDriver] No Chrome executable found in known paths.")
-        
-        # Final fallback - try headless mode
-        print("[ChromeDriver] Trying headless mode as last resort...")
-        try:
-            chrome_options = get_options()
-            chrome_options.add_argument("--headless")
-            driver = uc.Chrome(options=chrome_options, version_main=None)
-            print("[ChromeDriver] Started in headless mode successfully.")
-            return driver
-        except Exception as e:
-            print(f"[ChromeDriver] Headless mode also failed: {e}")
-        
+
+        # Final fallback - try headless mode (skip on ARM64 without system driver — same failure)
+        if not (_linux_arm64() and not driver_path):
+            print("[ChromeDriver] Trying headless mode as last resort...")
+            try:
+                chrome_options = get_options()
+                chrome_options.add_argument("--headless")
+                if chrome_path:
+                    chrome_options.binary_location = chrome_path
+                kw = dict(options=chrome_options, version_main=None)
+                if driver_path:
+                    kw["driver_executable_path"] = driver_path
+                driver = uc.Chrome(**kw)
+                print("[ChromeDriver] Started in headless mode successfully.")
+                return driver
+            except Exception as e3:
+                print(f"[ChromeDriver] Headless mode also failed: {e3}")
+
         raise Exception(
-            "[ChromeDriver] Failed to install ChromeDriver. A current version of Chrome was not detected on your system.\n"
-            "If you know that Chrome is installed, update Chrome to the latest version. If the script is still not working, "
-            "set the path to your Chrome executable manually inside the script."
+            "[ChromeDriver] Failed to start ChromeDriver.\n"
+            + (_arm64_linux_driver_help() if _linux_arm64() else (
+                "A current version of Chrome was not detected on your system.\n"
+                "If you know that Chrome is installed, update Chrome to the latest version. If the script is still not working, "
+                "set the path to your Chrome executable manually inside the script."
+            ))
         )
 
 if __name__ == '__main__':
